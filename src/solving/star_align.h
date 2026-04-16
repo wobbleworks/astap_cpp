@@ -43,6 +43,7 @@ using astap::ImageArray;
 ///          hold the quad centroid.
 ///----------------------------------------
 
+extern int diag_nrquads1, diag_nrquads2, diag_pass1_matches, diag_pass2_matches;
 extern StarList quad_star_distances1;
 
 ///----------------------------------------
@@ -129,7 +130,8 @@ struct IQuadCanvas {
 /// @param[out] starlist1 Output star list (2xN).
 ///----------------------------------------
 
-void find_stars(const ImageArray& img, double hfd_min, int max_stars, StarList& starlist1);
+void find_stars(const ImageArray& img, double hfd_min, int max_stars,
+                const Background& bck, StarList& starlist1);
 
 ///----------------------------------------
 ///      @brief Build quad descriptors (largest length + 5 ratios + centroid)

@@ -8,6 +8,8 @@
 
 #include "star_align.h"
 
+#include "../core/photometry.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -29,6 +31,10 @@ namespace astap::solving {
 
 StarList            quad_star_distances1;
 StarList            quad_star_distances2;
+int                 diag_nrquads1 = 0;
+int                 diag_nrquads2 = 0;
+int                 diag_pass1_matches = 0;
+int                 diag_pass2_matches = 0;
 StarList            A_XYpositions;
 std::vector<double> b_Xrefpositions;
 std::vector<double> b_Yrefpositions;
@@ -240,7 +246,11 @@ void get_brightest_stars(int nr_stars_required,
 [[nodiscard]] bool find_fit(int minimum_count, double quad_tolerance) {
     const auto nrquads1 = static_cast<int>(quad_star_distances1[0].size());
     const auto nrquads2 = static_cast<int>(quad_star_distances2[0].size());
-    
+    diag_nrquads1 = nrquads1;
+    diag_nrquads2 = nrquads2;
+    diag_pass1_matches = 0;
+    diag_pass2_matches = 0;
+
     if (nrquads1 < minimum_count || nrquads2 < minimum_count) {
         nr_references = 0;
         return false;
@@ -264,6 +274,7 @@ void get_brightest_stars(int nr_stars_required,
         }
     }
     
+    diag_pass1_matches = nr_references2;
     if (nr_references2 < minimum_count) {
         nr_references = 0;
         return false;
@@ -291,6 +302,7 @@ void get_brightest_stars(int nr_stars_required,
         // TODO: external dep (logger) - log dropped outliers.
     }
     
+    diag_pass2_matches = nr_references;
     if (nr_references < 3) {
         matchlist1.clear();
         matchlist2.clear();
@@ -728,121 +740,119 @@ void find_quads_xy(const StarList& starlist, StarList& starlistquads) {
     resize_2d_preserve(starlistquads, 10, static_cast<std::size_t>(nrquads));
 }
 
-void find_stars(const ImageArray& img, double hfd_min, int max_stars, StarList& starlist1) {
-    // TODO: external deps still to wire up:
-    //   HFD(img, fitsX, fitsY, 14, 99, 0, hfd1, star_fwhm, snr, flux, xc, yc)
-    //   bck.star_level / bck.star_level2 / bck.noise_level / bck.backgr
-    //   solve_show_log, memo2_message, gettickcount64
-    // The HFD call and bck.* reads below are placeholders until those land.
-    
+void find_stars(const ImageArray& img, double hfd_min, int max_stars,
+                const Background& bck, StarList& starlist1) {
     constexpr auto buffersize = 5000;
-    
+
     if (img.empty() || img[0].empty() || img[0][0].empty()) {
         set_length_2d(starlist1, 2, 0);
         return;
     }
-    
+
     const auto width2  = static_cast<int>(img[0][0].size());
     const auto height2 = static_cast<int>(img[0].size());
-    
+
     set_length_2d(starlist1, 2, buffersize);
     auto snr_list = std::vector<double>(buffersize, 0.0);
-    
-    // star-free mask; img_sa[0,y,x] < 0 => free, > 0 => occupied by a found star
+
     ImageArray img_sa;
-    img_sa.assign(1, std::vector<std::vector<float>>(height2, std::vector<float>(width2, -1.0f)));
-    
+    img_sa.assign(1, std::vector<std::vector<float>>(
+        height2, std::vector<float>(width2, -1.0f)));
+
     auto retries     = 3;
     auto nrstars     = 0;
     auto highest_snr = 0.0;
-    
+
+    astap::core::HfdScratch scratch{};
+
     do {
-        [[maybe_unused]] auto detection_level = 0.0;
-        // TODO: external dep - the following uses bck.* and requires its
-        // fields. Keeping the branching logic verbatim as pseudo-code.
-        #if 0
+        auto detection_level = 0.0;
         if (retries == 3) {
-            if (bck.star_level > 30 * bck.noise_level) detection_level = bck.star_level;
-            else retries = 2;
-        }
-        if (retries == 2) {
-            if (bck.star_level2 > 30 * bck.noise_level) detection_level = bck.star_level2;
-            else retries = 1;
-        }
-        if (retries == 1) detection_level = 30 * bck.noise_level;
-        if (retries == 0) detection_level = 7  * bck.noise_level;
-        #endif
-        
-        highest_snr = 0.0;
-        nrstars     = 0;
-        
-        // Clear the star-free mask for this pass.
-        for (int fitsY = 0; fitsY < height2; ++fitsY) {
-            for (int fitsX = 0; fitsX < width2; ++fitsX) {
-                img_sa[0][fitsY][fitsX] = -1.0f;
+            if (bck.star_level > 30 * bck.noise_level) {
+                detection_level = bck.star_level;
+            } else {
+                retries = 2;
             }
         }
-        
+        if (retries == 2) {
+            if (bck.star_level2 > 30 * bck.noise_level) {
+                detection_level = bck.star_level2;
+            } else {
+                retries = 1;
+            }
+        }
+        if (retries == 1) {
+            detection_level = 30 * bck.noise_level;
+        }
+        if (retries == 0) {
+            detection_level = 7 * bck.noise_level;
+        }
+
+        highest_snr = 0.0;
+        nrstars     = 0;
+
+        for (auto& row : img_sa[0]) {
+            std::fill(row.begin(), row.end(), -1.0f);
+        }
+
         for (int fitsY = 0; fitsY < height2 - 1; ++fitsY) {
             for (int fitsX = 0; fitsX < width2 - 1; ++fitsX) {
-                const auto free_area = img_sa[0][fitsY][fitsX] <= 0.0f;
-                // TODO: external dep - bck.backgr for this comparison.
-                // const auto is_star = (img[0][fitsY][fitsX] - bck.backgr) > detection_level;
-                constexpr auto is_star = false;  // placeholder; see TODO above
-                if (free_area && is_star) {
-                    auto hfd1 = 0.0;
-                    [[maybe_unused]] auto star_fwhm = 0.0;
-                    auto snr = 0.0;
-                    [[maybe_unused]] auto flux = 0.0;
-                    auto xc = 0.0;
-                    auto yc = 0.0;
-                    // TODO: external dep - HFD(img, fitsX, fitsY, 14, 99, 0, hfd1, star_fwhm, snr, flux, xc, yc);
-                    
-                    if (hfd1 <= 10.0 && snr > 10.0 && hfd1 > hfd_min) {
-                        const auto radius     = static_cast<int>(std::lround(3.0 * hfd1));
-                        const auto sqr_radius = radius * radius;
-                        const auto xci        = static_cast<int>(std::lround(xc));
-                        const auto yci        = static_cast<int>(std::lround(yc));
-                        
-                        // Mark the circular region around the star as occupied.
-                        for (int n = -radius; n <= radius; ++n) {
-                            for (int m = -radius; m <= radius; ++m) {
-                                const auto j = n + yci;
-                                const auto i = m + xci;
-                                if (j >= 0 && i >= 0 && j < height2 && i < width2 &&
-                                    (m * m + n * n) <= sqr_radius) {
-                                    img_sa[0][j][i] = 1.0f;
-                                }
+                if (img_sa[0][fitsY][fitsX] > 0.0f) {
+                    continue;
+                }
+                if ((img[0][fitsY][fitsX] - bck.backgr) <= detection_level) {
+                    continue;
+                }
+
+                astap::core::HfdResult r;
+                astap::core::HFD(img, fitsX, fitsY, /*rs=*/14,
+                    /*aperture_small=*/99.0, /*adu_e=*/0.0,
+                    /*xbinning=*/1.0, r, scratch);
+
+                if (r.hfd <= 10.0 && r.snr > 10.0 && r.hfd > hfd_min) {
+                    const auto radius     = static_cast<int>(std::lround(3.0 * r.hfd));
+                    const auto sqr_radius = radius * radius;
+                    const auto xci        = static_cast<int>(std::lround(r.xc));
+                    const auto yci        = static_cast<int>(std::lround(r.yc));
+
+                    for (int n = -radius; n <= radius; ++n) {
+                        for (int m = -radius; m <= radius; ++m) {
+                            const auto j = n + yci;
+                            const auto i = m + xci;
+                            if (j >= 0 && i >= 0 && j < height2 && i < width2
+                                    && (m * m + n * n) <= sqr_radius) {
+                                img_sa[0][j][i] = 1.0f;
                             }
                         }
-                        
-                        ++nrstars;
-                        if (nrstars >= static_cast<int>(starlist1[0].size())) {
-                            resize_2d_preserve(starlist1, 2, static_cast<std::size_t>(nrstars + buffersize));
-                            snr_list.resize(static_cast<std::size_t>(nrstars + buffersize), 0.0);
-                        }
-                        starlist1[0][nrstars - 1] = xc;
-                        starlist1[1][nrstars - 1] = yc;
-                        snr_list[nrstars - 1]     = snr;
-                        if (snr > highest_snr) {
-                            highest_snr = snr;
-                        }
+                    }
+
+                    ++nrstars;
+                    if (nrstars >= static_cast<int>(starlist1[0].size())) {
+                        resize_2d_preserve(starlist1, 2,
+                            static_cast<std::size_t>(nrstars + buffersize));
+                        snr_list.resize(
+                            static_cast<std::size_t>(nrstars + buffersize), 0.0);
+                    }
+                    starlist1[0][nrstars - 1] = r.xc;
+                    starlist1[1][nrstars - 1] = r.yc;
+                    snr_list[nrstars - 1]     = r.snr;
+                    if (r.snr > highest_snr) {
+                        highest_snr = r.snr;
                     }
                 }
             }
         }
         --retries;
     } while (!(nrstars >= max_stars || retries < 0));
-    
+
     img_sa.clear();
-    
+
     resize_2d_preserve(starlist1, 2, static_cast<std::size_t>(nrstars));
     snr_list.resize(static_cast<std::size_t>(nrstars));
-    
+
     if (nrstars > max_stars) {
         get_brightest_stars(max_stars, highest_snr, snr_list, starlist1);
     }
-    // TODO: external dep - memo2_message / solve_show_log timings.
 }
 
 bool find_offset_and_rotation(int minimum_quads, double tolerance) {

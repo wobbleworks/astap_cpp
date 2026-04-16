@@ -42,7 +42,7 @@ using astap::Header;
 /// @return @c true if a solution was found.
 ///----------------------------------------
 
-[[nodiscard]] bool solve_image(const ImageArray& img,
+[[nodiscard]] bool solve_image(ImageArray& img,
                                Header& hd,
                                std::vector<std::string>& log,
                                bool get_hist,

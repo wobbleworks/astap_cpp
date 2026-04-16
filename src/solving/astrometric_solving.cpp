@@ -18,9 +18,14 @@
 #include <string>
 #include <vector>
 
+#include "../core/fits.h"
 #include "../core/globals.h"
+#include "../core/photometry.h"
+#include "../core/util.h"
+#include "../core/wcs.h"
 #include "../reference/star_database.h"
 #include "../reference/stars_wide_field.h"
+#include "../stacking/stack.h"
 #include "calc_trans_cubic.h"
 #include "star_align.h"
 
@@ -72,65 +77,12 @@ using astap::reference::database_type;
 using astap::reference::database_path;
 
 ///----------------------------------------
-/// MARK: External dependencies
+/// MARK: StackMenuConfig + small helpers
 ///----------------------------------------
 
-namespace {
-
-// Forward declarations for symbols that live in other (not-yet-ported)
-// modules. Stubs at the bottom of this anonymous namespace provide a linkable
-// placeholder so this translation unit compiles in isolation.
-
-// TODO: from unit_star_database.pas. Picks up to four star-database tiles that
-// cover a square search field, and the area fractions each tile contributes.
-void find_areas(double ra, double dec, double search_field,
-                int& area1, int& area2, int& area3, int& area4,
-                double& frac1, double& frac2, double& frac3, double& frac4);
-                
-// TODO: from unit_star_database.pas. Opens (or rewinds) the star-database
-// file for the given tile. Returns false on I/O failure.
-[[nodiscard]] bool open_database(double telescope_dec, int area);
-
-// TODO: from unit_star_database.pas. Streams the next star within the search
-// field from the currently open database, returning false at end-of-tile.
-// Updates the module-level @c mag2 with the star's magnitude on each hit.
-[[nodiscard]] bool readdatabase290(double telescope_ra, double telescope_dec,
-                                   double search_field,
-                                   double& ra, double& dec,
-                                   double& mag, double& bp_rp);
-                                   
-// TODO: from unit_stars_wide_field.pas. Loads the wide-field star array into
-// @c wide_field_stars and sets @c wide_database := @c name_database.
-void read_stars_wide_field();
-
-// TODO: from astap_main.pas. Angular separation between two (ra, dec) pairs.
-void ang_sep(double ra1, double dec1, double ra2, double dec2, double& sep);
-
-// TODO: from astap_main.pas. Positive modulo for doubles: fnmodulo(x, m).
-[[nodiscard]] double fnmodulo(double x, double m);
-
-// TODO: from astap_main / unit_stack. Background statistics output record.
-struct BackgroundInfo;
-extern BackgroundInfo bck;
-void get_background(int colour, const ImageArray& img,
-                    bool update_hist, bool calc_stddev,
-                    BackgroundInfo& out);
-                    
-// TODO: from unit_stack. Checks OSC Bayer pattern and flags it on the image.
-void check_pattern_filter(const ImageArray& img);
-
-// TODO: from unit_star_database. Chooses the database type based on requested
-// FOV. 001 = wide field, 290 / 1476 = tile databases. Returns false if no
-// database is installed.
-[[nodiscard]] bool select_star_database(const std::string& requested, double fov);
-
-// TODO: from unit_annotation. Optional debug overlay.
-void plot_stars_used_for_solving(const StarList& db_stars,
-                                 const StarList& img_stars,
-                                 const Header& hd,
-                                 double correctionX, double correctionY);
-                                 
-// TODO: from astap_main. Config values normally sourced from the stacking UI.
+// Solver configuration — sourced from the stacking UI in the original,
+// populated from engine globals via populate_stackcfg_from_globals() at
+// the top of solve_image.
 struct StackMenuConfig {
     std::string star_database;
     std::string radius_search_deg;
@@ -143,19 +95,94 @@ struct StackMenuConfig {
     bool use_triples    = false;
     bool add_sip        = false;
 };
-extern StackMenuConfig stackcfg;
 
-// TODO: header-mutating helpers. Placeholders for the eventual C++ helpers;
-// stubbed as no-ops below until the WCS serialiser is ported.
-void update_integer(std::vector<std::string>& memo, const std::string& key,
-                    const std::string& comment, int value);
-void update_float(std::vector<std::string>& memo, const std::string& key,
-                  const std::string& comment, bool exponential, double value);
-void update_text(std::vector<std::string>& memo, const std::string& key,
-                 const std::string& value);
-void update_longstr(std::vector<std::string>& memo, const std::string& key,
-                    const std::string& value);
-void remove_key(std::vector<std::string>& memo, const std::string& key, bool all);
+///----------------------------------------
+/// MARK: Delegates to real implementations
+///----------------------------------------
+
+// Each function preserves the local signature expected by solve_image's
+// call sites while forwarding to the real implementation in the correct
+// namespace (astap::core, astap::reference, astap::stacking).
+
+astap::Background bck;
+StackMenuConfig stackcfg;
+
+inline void find_areas(double ra, double dec, double fov,
+                       int& a1, int& a2, int& a3, int& a4,
+                       double& f1, double& f2, double& f3, double& f4) {
+    astap::reference::find_areas(ra, dec, fov, a1, a2, a3, a4, f1, f2, f3, f4);
+}
+
+inline bool open_database(double telescope_dec, int area290) {
+    return astap::reference::open_database(telescope_dec, area290);
+}
+
+inline bool readdatabase290(double ra, double dec, double fov,
+                            double& ra2, double& dec2, double& mag2v, double& bp_rp) {
+    return astap::reference::readdatabase290(ra, dec, fov, ra2, dec2, mag2v, bp_rp);
+}
+
+inline void read_stars_wide_field() {
+    (void)astap::reference::read_stars_wide_field();
+}
+
+inline void ang_sep(double ra1, double dec1, double ra2, double dec2, double& sep) {
+    astap::core::ang_sep(ra1, dec1, ra2, dec2, sep);
+}
+
+inline double fnmodulo(double x, double range) {
+    return astap::core::fnmodulo(x, range);
+}
+
+inline void get_background(int colour, const ImageArray& img,
+                           bool calc_hist, bool calc_noise, astap::Background& b) {
+    astap::core::get_background(colour, img, calc_hist, calc_noise, b);
+}
+
+inline void check_pattern_filter(ImageArray& img) {
+    astap::stacking::check_pattern_filter(img);
+}
+
+inline bool select_star_database(const std::string& requested, double fov) {
+    return astap::reference::select_star_database(requested, fov);
+}
+
+inline void plot_stars_used_for_solving(const StarList&, const StarList&,
+                                        const Header&, double, double) {}
+
+inline void update_integer(std::vector<std::string>& m, const std::string& k,
+                           const std::string& c, int v) {
+    astap::core::update_integer(m, k, c, v);
+}
+inline void update_float(std::vector<std::string>& m, const std::string& k,
+                         const std::string& c, bool p, double v) {
+    astap::core::update_float(m, k, c, p, v);
+}
+inline void update_text(std::vector<std::string>& m, const std::string& k,
+                        const std::string& v) {
+    astap::core::update_text(m, k, v);
+}
+inline void update_longstr(std::vector<std::string>& m, const std::string& k,
+                           const std::string& v) {
+    astap::core::update_longstr(m, k, v);
+}
+inline void remove_key(std::vector<std::string>& m, const std::string& k, bool all) {
+    astap::core::remove_key(m, k, all);
+}
+
+void populate_stackcfg_from_globals() {
+    stackcfg.star_database = astap::reference::name_database;
+    stackcfg.radius_search_deg = std::format("{}", astap::search_radius_deg);
+    stackcfg.search_fov_deg = std::format("{}", astap::search_fov_deg);
+    stackcfg.max_stars = std::format("{}", astap::max_stars_setting);
+    stackcfg.quad_tolerance = std::format("{}", astap::quad_tolerance);
+    stackcfg.min_star_size = std::format("{}", astap::min_star_size_arcsec);
+    stackcfg.downsample_for_solving_index = astap::downsample_setting;
+    stackcfg.force_oversize = astap::force_oversize;
+    stackcfg.add_sip = astap::add_sip;
+}
+
+namespace {
 
 ///----------------------------------------
 /// MARK: Small helpers
@@ -528,77 +555,11 @@ void create_grid_list(int width2, int height2, int nrpoints, StarArray& grid_lis
     }
 }
 
-// prepare_ra / prepare_dec are implemented in astap::core (wcs.h); stubs
-// keep the CLI linkable until those adapters are wired in.
-[[nodiscard]] inline std::string prepare_ra  ([[maybe_unused]] double ra_rad,  [[maybe_unused]] const std::string& sep) { return {}; }
-[[nodiscard]] inline std::string prepare_dec ([[maybe_unused]] double dec_rad, [[maybe_unused]] const std::string& sep) { return {}; }
-[[nodiscard]] inline std::string prepare_ra8 ([[maybe_unused]] double ra_rad,  [[maybe_unused]] const std::string& sep) { return {}; }
-[[nodiscard]] inline std::string prepare_dec2([[maybe_unused]] double dec_rad, [[maybe_unused]] const std::string& sep) { return {}; }
+[[nodiscard]] inline std::string prepare_ra(double r, const std::string& s)   { return astap::core::prepare_ra(r, s); }
+[[nodiscard]] inline std::string prepare_dec(double d, const std::string& s)  { return astap::core::prepare_dec(d, s); }
+[[nodiscard]] inline std::string prepare_ra8(double r, const std::string& s)  { return astap::core::prepare_ra8(r, s); }
+[[nodiscard]] inline std::string prepare_dec2(double d, const std::string& s) { return astap::core::prepare_dec2(d, s); }
 
-///----------------------------------------
-/// MARK: Stub definitions for forward-declared externals
-///----------------------------------------
-
-// The real implementations live in other namespaces (astap::core,
-// astap::reference, etc.) or aren't ported yet; these stubs satisfy the
-// linker so the CLI binary produces. solve_image() call-sites are gated so
-// the stubbed backends return sentinel values without crashing.
-
-struct BackgroundInfo {
-    double backgr      = 0.0;
-    double star_level  = 0.0;
-    double star_level2 = 0.0;
-    double noise_level = 0.0;
-};
-BackgroundInfo bck;
-StackMenuConfig stackcfg;
-
-void find_areas(double, double, double,
-                int& a1, int& a2, int& a3, int& a4,
-                double& f1, double& f2, double& f3, double& f4) {
-    a1 = a2 = a3 = a4 = 0;
-    f1 = f2 = f3 = f4 = 0.0;
-}
-
-bool open_database(double, int) {
-    return false;
-}
-
-bool readdatabase290(double, double, double,
-                     double& ra, double& dec, double& mag, double& bp_rp) {
-    ra = dec = mag = bp_rp = 0.0;
-    return false;
-}
-
-void read_stars_wide_field() {}
-
-void ang_sep(double, double, double, double, double& sep) {
-    sep = 0.0;
-}
-
-double fnmodulo(double, double) {
-    return 0.0;
-}
-
-void get_background(int, const ImageArray&, bool, bool, BackgroundInfo& b) {
-    b = BackgroundInfo{};
-}
-
-void check_pattern_filter(const ImageArray&) {}
-
-bool select_star_database(const std::string&, double) {
-    return false;
-}
-
-void plot_stars_used_for_solving(const StarList&, const StarList&,
-                                 const Header&, double, double) {}
-                                 
-void update_integer(std::vector<std::string>&, const std::string&, const std::string&, int) {}
-void update_float(std::vector<std::string>&, const std::string&, const std::string&, bool, double) {}
-void update_text(std::vector<std::string>&, const std::string&, const std::string&) {}
-void update_longstr(std::vector<std::string>&, const std::string&, const std::string&) {}
-void remove_key(std::vector<std::string>&, const std::string&, bool) {}
-    
 } // namespace
 
 ///----------------------------------------
@@ -835,7 +796,7 @@ void bin_and_find_stars(const ImageArray& img,
         }
         
         get_background(0, img_binned, true, true, bck);
-        find_stars(img_binned, hfd_min, max_stars, starlist3);
+        find_stars(img_binned, hfd_min, max_stars, bck, starlist3);
         
         if (static_cast<int>(img_binned[0].size()) < 960) {
             short_warning = "Warning, remaining image dimensions too low! ";
@@ -870,7 +831,7 @@ void bin_and_find_stars(const ImageArray& img,
         }
         
         get_background(0, img, get_hist, true, bck);
-        find_stars(img, hfd_min, max_stars, starlist3);
+        find_stars(img, hfd_min, max_stars, bck, starlist3);
     }
 }
 
@@ -887,14 +848,26 @@ int report_binning(double height) {
 /// MARK: Main plate solver
 ///----------------------------------------
 
-bool solve_image(const ImageArray& img, Header& hd,
+bool solve_image(ImageArray& img, Header& hd,
                  std::vector<std::string>& memo,
                  bool get_hist, bool check_patternfilter) {
+    // Sync solver settings from engine globals (set by CLI arg parser or
+    // GUI dialog) into the file-local StackMenuConfig that the solver reads.
+    populate_stackcfg_from_globals();
+
+    // Sync RA/Dec search centre from the header's position hint.
+    ra_radians = hd.ra0;
+    dec_radians = hd.dec0;
+
+    // Verbose per-position logging. Controlled by the global flag which the
+    // GUI could expose as a checkbox in the Solve dialog later.
+    solve_show_log = astap::commandline_log;
+
     esc_pressed = false;
     warning_str.clear();
     const auto startTick = std::chrono::steady_clock::now();
     auto popup_warningG05 = std::string{};
-    
+
     if (check_patternfilter) {
         check_pattern_filter(img);
         get_hist = true;
@@ -1258,7 +1231,15 @@ bool solve_image(const ImageArray& img, Header& hd,
                             }
                             
                             solution = find_offset_and_rotation(minimum_quads, quad_tolerance);
-                            
+
+                            if (solve_show_log && count <= 3) {
+                                memo2_message(memo,
+                                    "  match diag: q1=" + std::to_string(diag_nrquads1) +
+                                    " q2=" + std::to_string(diag_nrquads2) +
+                                    " pass1=" + std::to_string(diag_pass1_matches) +
+                                    " pass2=" + std::to_string(diag_pass2_matches));
+                            }
+
                             if (esc_pressed) {
                                 return false;
                             }
