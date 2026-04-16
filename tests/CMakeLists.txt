@@ -21,10 +21,11 @@ enable_testing()
 
 # ---- Paths ------------------------------------------------------------------
 
-# tests/ is two levels deep from the wobbleworks root: wobbleworks/ASTAP++/tests
-set(ASTAP_WW_ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/../..")
-set(ASTAP_DOCTEST_HEADERS "${ASTAP_WW_ROOT}/third_party/doctest")
-set(ASTAP_SRC            "${CMAKE_CURRENT_SOURCE_DIR}/../src")
+# Expect a sibling `doctest` directory next to this repo:
+#   <parent>/astap_cpp/
+#   <parent>/doctest/doctest/doctest.h
+set(ASTAP_DOCTEST_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/../../doctest")
+set(ASTAP_SRC             "${CMAKE_CURRENT_SOURCE_DIR}/../src")
 
 if(NOT EXISTS "${ASTAP_DOCTEST_HEADERS}/doctest/doctest.h")
 	message(FATAL_ERROR "doctest header not found at ${ASTAP_DOCTEST_HEADERS}/doctest/doctest.h")

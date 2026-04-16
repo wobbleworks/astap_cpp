@@ -49,7 +49,8 @@ if(ASTAP_BUILD_CLI)
 	target_link_libraries(astap PRIVATE astap_lib)
 	target_include_directories(astap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
 
-	if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb")
-		target_include_directories(astap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb")
+	# Optional: sibling `stb` directory for stb_image.h
+	if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../stb")
+		target_include_directories(astap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../stb")
 	endif()
 endif()
