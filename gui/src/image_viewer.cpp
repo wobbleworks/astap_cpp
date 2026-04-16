@@ -80,10 +80,11 @@ void ImageViewer::setImage(astap::ImageArray image, astap::Header header) {
 	// A pending coalesced render would just redo what we're about to do.
 	_renderTimer.stop();
 
-	// Star markers from a previous image no longer apply.
+	// Markers from a previous image no longer apply.
 	_stars.clear();
+	_annotations.clear();
 
-	// Take ownership of the new data
+	// Take ownership
 	_image = std::move(image);
 	_header = header;
 
@@ -106,6 +107,16 @@ void ImageViewer::setStarMarkers(std::vector<DetectedStar> stars) {
 
 void ImageViewer::clearStarMarkers() {
 	_stars.clear();
+	update();
+}
+
+void ImageViewer::setAnnotations(std::vector<AnnotationMarker> annotations) {
+	_annotations = std::move(annotations);
+	update();
+}
+
+void ImageViewer::clearAnnotations() {
+	_annotations.clear();
 	update();
 }
 
@@ -261,6 +272,48 @@ void ImageViewer::paintEvent(QPaintEvent* event) {
 			const auto vy = dst.top() + (srcY + 0.5) * effectiveZoom;
 			const auto rPx = std::max(3.0, 1.5 * star.hfd * effectiveZoom);
 			painter.drawEllipse(QPointF(vx, vy), rPx, rPx);
+		}
+	}
+
+	// Deep-sky annotation overlay — names + ellipses for cataloged objects.
+	if (!_annotations.empty() && _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		QPen ellipsePen(QColor(255, 200, 60, 200));
+		ellipsePen.setWidthF(1.0);
+		QFont labelFont = painter.font();
+		labelFont.setPointSizeF(std::max(7.0, 9.0 * std::min(1.0, effectiveZoom)));
+		painter.setFont(labelFont);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+
+		for (const auto& ann : _annotations) {
+			const auto imgCol = ann.x - 1.0;
+			const auto imgRow = (h - 1) - (ann.y - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+
+			const auto vx = dst.left() + (srcX + 0.5) * effectiveZoom;
+			const auto vy = dst.top() + (srcY + 0.5) * effectiveZoom;
+
+			// Ellipse (if the object has a measurable size)
+			const auto majorPx = ann.majorPx * effectiveZoom;
+			const auto minorPx = ann.minorPx * effectiveZoom;
+			if (majorPx > 3.0) {
+				painter.setPen(ellipsePen);
+				painter.setBrush(Qt::NoBrush);
+				painter.save();
+				painter.translate(vx, vy);
+				painter.rotate(-ann.paDeg);
+				painter.drawEllipse(QPointF(0, 0), majorPx, minorPx);
+				painter.restore();
+			}
+
+			// Label — offset slightly above the ellipse
+			painter.setPen(QColor(255, 200, 60, 230));
+			const auto labelOffset = std::max(8.0, majorPx + 4.0);
+			painter.drawText(QPointF(vx + 4, vy - labelOffset), ann.name);
 		}
 	}
 }

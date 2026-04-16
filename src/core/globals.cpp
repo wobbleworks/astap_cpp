@@ -138,6 +138,36 @@ std::vector<std::string> memo2_lines;
 std::filesystem::path application_path;
 std::vector<std::string> recent_files;
 int raw_conversion_program_index = 0;
-std::vector<std::string> head1;
+std::vector<std::string> head1 = {
+	/*  0 */ "SIMPLE  =                    T / FITS header                                    ",
+	/*  1 */ "BITPIX  =                    8 / Bits per entry                                 ",
+	/*  2 */ "NAXIS   =                    2 / Number of dimensions                           ",
+	/*  3 */ "NAXIS1  =                  100 / length of x axis                               ",
+	/*  4 */ "NAXIS2  =                  100 / length of y axis                               ",
+	/*  5 */ "NAXIS3  =                    3 / length of z axis (mostly colors)               ",
+	/*  6 */ "EQUINOX =               2000.0 / Equinox of coordinates                         ",
+	/*  7 */ "DATAMIN =                    0 / Minimum data value                             ",
+	/*  8 */ "DATAMAX =                  255 / Maximum data value                             ",
+	/*  9 */ "BZERO   =                  0.0 / physical_value = BZERO + BSCALE * array_value  ",
+	/* 10 */ "BSCALE  =                  1.0 / physical_value = BZERO + BSCALE * array_value  ",
+	/* 11 */ "CTYPE1  = 'RA---TAN'           / first parameter RA  ,  projection TANgential   ",
+	/* 12 */ "CTYPE2  = 'DEC--TAN'           / second parameter DEC,  projection TANgential   ",
+	/* 13 */ "CUNIT1  = 'deg     '           / Unit of coordinates                            ",
+	/* 14 */ "CRPIX1  =                  0.0 / X of reference pixel                           ",
+	/* 15 */ "CRPIX2  =                  0.0 / Y of reference pixel                           ",
+	/* 16 */ "CRVAL1  =                  0.0 / RA of reference pixel (deg)                    ",
+	/* 17 */ "CRVAL2  =                  0.0 / DEC of reference pixel (deg)                   ",
+	/* 18 */ "CDELT1  =                  0.0 / X pixel size (deg)                             ",
+	/* 19 */ "CDELT2  =                  0.0 / Y pixel size (deg)                             ",
+	/* 20 */ "CROTA1  =                  0.0 / Image twist X axis(deg)                        ",
+	/* 21 */ "CROTA2  =                  0.0 / Image twist Y axis deg) E of N if not flipped  ",
+	/* 22 */ "CD1_1   =                  0.0 / CD matrix to convert (x,y) to (Ra, Dec)        ",
+	/* 23 */ "CD1_2   =                  0.0 / CD matrix to convert (x,y) to (Ra, Dec)        ",
+	/* 24 */ "CD2_1   =                  0.0 / CD matrix to convert (x,y) to (Ra, Dec)        ",
+	/* 25 */ "CD2_2   =                  0.0 / CD matrix to convert (x,y) to (Ra, Dec)        ",
+	/* 26 */ "PLTSOLVD=                    T / ASTAP from hnsky.org                           ",
+	/* 27 */ "END                                                                             ",
+	/* 28 */ "                                                                                ",
+};
 	
 } // namespace

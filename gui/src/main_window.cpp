@@ -7,6 +7,7 @@
 ///----------------------------------------
 
 #include "main_window.h"
+#include "annotation_scanner.h"
 #include "controls_panel.h"
 #include "image_viewer.h"
 #include "log_window.h"
@@ -14,6 +15,7 @@
 #include "star_detector.h"
 #include "ui_main_window.h"
 
+#include "../../src/core/fits.h"
 #include "../../src/core/globals.h"
 #include "../../src/core/image_io.h"
 #include "../../src/core/wcs.h"
@@ -98,13 +100,18 @@ MainWindow::MainWindow(QWidget* parent) :
 
 	// Menu wires
 	connect(_ui->actionOpen, &QAction::triggered, this, &MainWindow::openFile);
+	connect(_ui->actionSave, &QAction::triggered, this, &MainWindow::saveFile);
+	connect(_ui->actionSaveAs, &QAction::triggered, this, &MainWindow::saveFileAs);
 	connect(_ui->actionQuit, &QAction::triggered, this, &QWidget::close);
 	connect(_ui->actionAbout, &QAction::triggered, this, &MainWindow::showAbout);
 	connect(_ui->actionSolve, &QAction::triggered, this, &MainWindow::solveImage);
 	connect(_ui->actionShowSolverLog, &QAction::triggered, this, &MainWindow::showSolverLog);
 	connect(_ui->actionAnalyse, &QAction::triggered, this, &MainWindow::analyseStars);
-	connect(_ui->actionClearMarkers, &QAction::triggered,
-		_ui->imageViewer, &ImageViewer::clearStarMarkers);
+	connect(_ui->actionAnnotate, &QAction::triggered, this, &MainWindow::annotateDeepSky);
+	connect(_ui->actionClearMarkers, &QAction::triggered, this, [this]() {
+		_ui->imageViewer->clearStarMarkers();
+		_ui->imageViewer->clearAnnotations();
+	});
 
 	connect(_ui->actionZoomIn, &QAction::triggered,
 		_ui->imageViewer, &ImageViewer::zoomIn);
@@ -139,10 +146,16 @@ MainWindow::MainWindow(QWidget* parent) :
 
 	_ui->actionSolve->setEnabled(false);
 	_ui->actionAnalyse->setEnabled(false);
+	_ui->actionAnnotate->setEnabled(false);
+	_ui->actionSave->setEnabled(false);
+	_ui->actionSaveAs->setEnabled(false);
 	connect(_ui->imageViewer, &ImageViewer::imageLoaded, this, [this]() {
 		const auto has = _ui->imageViewer->hasImage();
 		_ui->actionSolve->setEnabled(has);
 		_ui->actionAnalyse->setEnabled(has);
+		_ui->actionAnnotate->setEnabled(has && astap::head.cdelt2 != 0.0);
+		_ui->actionSave->setEnabled(has);
+		_ui->actionSaveAs->setEnabled(has);
 	});
 
 	// Persisted state (geometry, splitter, recent files, database path...)
@@ -364,6 +377,7 @@ void MainWindow::onSolveFinished() {
 	}
 
 	updateWcsReadout();
+	_ui->actionAnnotate->setEnabled(true);
 
 	const auto cdelt = std::abs(astap::head.cdelt2) * 3600.0;
 	statusBar()->showMessage(tr("Solved at %1 arcsec/px").arg(cdelt, 0, 'f', 2));
@@ -463,6 +477,135 @@ void MainWindow::updateWcsReadout() {
 	if (astap::head.cdelt2 == 0.0) {
 		_cursorCelestialLabel->clear();
 	}
+}
+
+// Produce a clean FITS header from memo1_lines. The solver pushes log
+// strings after END, and its update_float/update_text may insert WCS
+// cards after END too (because log lines moved the "last line" past END).
+// This helper keeps every line that looks like a valid FITS card and
+// discards solver log debris, then ensures END is the very last entry.
+static void sanitize_memo_for_save(std::vector<std::string>& memo) {
+	auto isFitsCard = [](const std::string& line) -> bool {
+		if (line.empty()) {
+			return false;
+		}
+		// Keyword = value cards have '=' at column 9.
+		if (line.size() >= 10 && line[8] == '=') {
+			return true;
+		}
+		// COMMENT, HISTORY, and blank cards.
+		if (line.starts_with("COMMENT") || line.starts_with("HISTORY")) {
+			return true;
+		}
+		// All-space padding.
+		if (line.find_first_not_of(' ') == std::string::npos) {
+			return false;
+		}
+		return false;
+	};
+
+	// Collect valid FITS cards from the entire memo (before AND after END),
+	// skipping END itself and any non-FITS log lines.
+	auto clean = std::vector<std::string>{};
+	clean.reserve(memo.size());
+	for (auto& line : memo) {
+		if (line.starts_with("END")) {
+			continue;
+		}
+		if (isFitsCard(line)) {
+			clean.push_back(std::move(line));
+		}
+	}
+	clean.emplace_back(
+		"END                                                                             ");
+	memo = std::move(clean);
+}
+
+void MainWindow::saveFile() {
+	if (astap::filename2.empty()) {
+		saveFileAs();
+		return;
+	}
+
+	const auto path = std::filesystem::path(astap::filename2);
+	const auto ext = path.extension().string();
+	const auto isFits = (ext == ".fit" || ext == ".fits" || ext == ".fts"
+		|| ext == ".FIT" || ext == ".FITS" || ext == ".FTS");
+
+	if (isFits) {
+		auto memo = astap::memo1_lines;
+		sanitize_memo_for_save(memo);
+		const auto ok = astap::core::savefits_update_header(memo, path);
+		if (ok) {
+			statusBar()->showMessage(tr("Header saved to %1").arg(
+				QString::fromStdString(astap::filename2)));
+		} else {
+			QMessageBox::warning(this, tr("Save"),
+				tr("Failed to update the header of %1.").arg(
+					QString::fromStdString(astap::filename2)));
+		}
+	} else {
+		saveFileAs();
+	}
+}
+
+void MainWindow::saveFileAs() {
+	const auto path = QFileDialog::getSaveFileName(
+		this,
+		tr("Save As FITS"),
+		QString(),
+		tr("FITS images (*.fits);;All files (*)"));
+	if (path.isEmpty()) {
+		return;
+	}
+
+	auto memo = astap::memo1_lines;
+	sanitize_memo_for_save(memo);
+
+	const auto ok = astap::core::save_fits(
+		astap::img_loaded,
+		memo,
+		std::filesystem::path(path.toStdString()),
+		/*type1=*/16,
+		/*override2=*/true);
+	if (ok) {
+		astap::filename2 = path.toStdString();
+		statusBar()->showMessage(tr("Saved to %1").arg(path));
+	} else {
+		QMessageBox::warning(this, tr("Save As"),
+			tr("Failed to save %1.").arg(path));
+	}
+}
+
+void MainWindow::annotateDeepSky() {
+	if (astap::head.cdelt2 == 0.0) {
+		QMessageBox::information(this, tr("Annotate"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+
+	// Ensure the catalog is loaded. Try the database path first, then
+	// the directory containing the loaded image (some installs put the
+	// CSV alongside the database files).
+	if (!load_deepsky_catalog(astap::reference::database_path)) {
+		const auto imgDir = std::filesystem::path(astap::filename2).parent_path();
+		if (!load_deepsky_catalog(imgDir)) {
+			QMessageBox::warning(this, tr("Annotate"),
+				tr("Could not load deep_sky.csv from the database path (%1).\n\n"
+				   "Make sure the ASTAP catalog files are installed.")
+					.arg(QString::fromStdString(
+						astap::reference::database_path.string())));
+			return;
+		}
+	}
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	const auto markers = annotate_image(astap::head);
+	QGuiApplication::restoreOverrideCursor();
+
+	_ui->imageViewer->setAnnotations(markers);
+	statusBar()->showMessage(
+		tr("%1 deep-sky objects annotated").arg(markers.size()));
 }
 
 void MainWindow::showSolverLog() {

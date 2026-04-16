@@ -21,6 +21,7 @@
 #pragma once
 
 #include "../../src/types.h"
+#include "annotation_scanner.h"
 #include "star_detector.h"
 
 #include <QImage>
@@ -150,6 +151,13 @@ public:
 	[[nodiscard]] const std::vector<DetectedStar>& starMarkers() const noexcept { return _stars; }
 	///@}
 
+	/// @name Annotation overlay
+	///@{
+	void setAnnotations(std::vector<AnnotationMarker> annotations);
+	void clearAnnotations();
+	[[nodiscard]] const std::vector<AnnotationMarker>& annotations() const noexcept { return _annotations; }
+	///@}
+
 signals:
 	/// @brief Emitted after @ref setImage has updated histograms / defaults.
 	void imageLoaded();
@@ -211,6 +219,7 @@ private:
 	QPointF _panAnchorOffset;
 
 	std::vector<DetectedStar> _stars;
+	std::vector<AnnotationMarker> _annotations;
 };
 
 } // namespace astap::gui

@@ -71,6 +71,8 @@
      <string>&amp;File</string>
     </property>
     <addaction name="actionOpen"/>
+    <addaction name="actionSave"/>
+    <addaction name="actionSaveAs"/>
     <addaction name="separator"/>
     <addaction name="actionQuit"/>
    </widget>
@@ -94,6 +96,7 @@
      <string>&amp;Image</string>
     </property>
     <addaction name="actionAnalyse"/>
+    <addaction name="actionAnnotate"/>
     <addaction name="actionClearMarkers"/>
     <addaction name="separator"/>
     <addaction name="actionSolve"/>
@@ -192,6 +195,27 @@
    </property>
    <property name="checked">
     <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionSave">
+   <property name="text">
+    <string>&amp;Save</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+S</string>
+   </property>
+  </action>
+  <action name="actionSaveAs">
+   <property name="text">
+    <string>Save &amp;As…</string>
+   </property>
+  </action>
+  <action name="actionAnnotate">
+   <property name="text">
+    <string>&amp;Deep-Sky Annotation</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+D</string>
    </property>
   </action>
   <action name="actionAnalyse">

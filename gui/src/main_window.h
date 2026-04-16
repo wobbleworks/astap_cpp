@@ -56,6 +56,9 @@ private slots:
 	void openRecent();
 	void analyseStars();
 	void onAnalyseFinished();
+	void annotateDeepSky();
+	void saveFile();
+	void saveFileAs();
 
 protected:
 	void closeEvent(QCloseEvent* event) override;
