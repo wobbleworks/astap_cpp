@@ -1,0 +1,30 @@
+# CMake build artifacts
+build/
+build-xcf/
+tests/build/
+lib/
+
+# macOS metadata
+.DS_Store
+
+# Editor / IDE state
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.xcworkspace/
+*.xcuserdata/
+
+# Object files / binaries
+*.o
+*.a
+*.dylib
+*.so
+*.exe
+
+# Backup files left by sed or editors
+*.bak
+
+# Upstream Pascal source (reference only, not part of the C++ port)
+src/analysis/*.pas

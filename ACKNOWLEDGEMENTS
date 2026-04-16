@@ -1,0 +1,95 @@
+ASTAP++ — Database and third-party acknowledgements
+====================================================
+
+ASTAP++ is a C++23 port of ASTAP (Astrometric STAcking Program) by Han
+Kleijn, www.hnsky.org. Database acknowledgements below follow the
+original ASTAP documentation.
+
+
+deep_sky.csv
+------------
+
+A free-to-use deep-sky database of 30,000 objects for non-commercial
+use only, compiled by Han Kleijn between 1997 and 2020 for the Hallo
+Northern Sky program and ASTAP, based heavily on:
+
+- SAC81, Saguaro Astronomy Club Database v8.1 (March 22, 2010), Steve
+  Coe, database manager. https://www.saguaroastro.org/sac-downloads
+
+- Wolfgang Steinicke's Revised NGC & IC.
+  http://www.klima-luft.de/steinicke/index_e.htm
+  Non-commercial use is free but the author requests notification.
+  Commercial use requires prior contact. A proper acknowledgement of
+  the source, including an answer-back to the author, is necessary
+  in all cases.
+
+- HyperLeda — see separate entry below.
+
+- Sh2 — Sharpless S. 1959, "A catalogue of HII regions",
+  ApJS 4, 257-279. 1959ApJS....4..257S
+
+- vdB — Van den Bergh S. 1968, "A study of reflection nebulae",
+  AJ 73, 233-245. 1968AJ.....73..233R
+
+- HCG — Nolthenius R. 1993, "A revised catalog of CfA1 galaxy groups
+  in the Virgo/Great Attractor flow field", ApJS 85, 1-25.
+  1993ApJS...85....1N
+
+- LDN — Lynds B.T. 1962, "Catalogue of dark nebulae", ApJS 7, 1-52.
+  1962ApJS....7....1L
+
+- PK — Kohoutek L. and Kuhl D. 2002, "Accurate coordinates of
+  planetary nebulae", AN 323, 484-487. 2002AN....323..484K
+
+- SIMBAD Astronomical Database, Centre de Données astronomiques de
+  Strasbourg, was heavily used in the compilation.
+
+
+variable_stars.csv
+------------------
+
+Selection from GCVS, the General Catalogue of Variable Stars,
+version 5.1, by Samus N.N., Kazarovets E.V., Durlevich O.V.,
+Kireeva N.N., and Pastukhova E.N.
+Astronomy Reports, 2017, vol. 61, No. 1, pp. 80-88. 2017ARep...61...80S
+Compiled 2019-6-6.
+
+
+hyperleda.csv
+-------------
+
+Extract from the HyperLEDA database, http://leda.univ-lyon1.fr
+
+HyperLEDA is a collection of homogenised measurements of galaxies,
+maintained by the Observatoire de Lyon (France) and the Special
+Astrophysical Observatory (Russia). All data and software are publicly
+available under open-source terms for non-commercial use.
+
+- Paper: Makarov et al., 2014, A&A 570, A13.
+  http://adsabs.harvard.edu/abs/2014A%26A...570A..13M
+- "We acknowledge the usage of the HyperLeda database,
+   http://leda.univ-lyon1.fr"
+
+
+D05, D20, D50, V50, G05 star databases
+--------------------------------------
+
+Extracts from the Gaia star catalog release DR3 by the European Space
+Agency (ESA), in a special format developed for the HNSKY planetarium
+program and ASTAP.
+
+Standard Gaia acknowledgement:
+
+  This work has made use of data from the European Space Agency (ESA)
+  mission Gaia (https://www.cosmos.esa.int/gaia), processed by the
+  Gaia Data Processing and Analysis Consortium (DPAC,
+  https://www.cosmos.esa.int/web/gaia/dpac/consortium). Funding for the
+  DPAC has been provided by national institutions, in particular the
+  institutions participating in the Gaia Multilateral Agreement.
+
+Gaia data are open and free to use provided credit is given to
+'ESA/Gaia/DPAC'. Neither ESA nor any other party involved in producing
+the archive is liable for any direct, incidental, consequential,
+indirect, or punitive damages arising from its use.
+
+

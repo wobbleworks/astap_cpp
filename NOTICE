@@ -1,0 +1,11 @@
+ASTAP++
+=======
+
+Copyright (C) 2017-2024 Han Kleijn (www.hnsky.org) — original Pascal ASTAP.
+Copyright (C) 2026 John Stephen / wobbleworks.com — C++23 port.
+
+License: Mozilla Public License, version 2.0.
+See the LICENSE file for the full text.
+
+The ephemeris module (src/core/ephemerides.{h,cpp}) is a clean-room
+implementation derived from Meeus, "Astronomical Algorithms" 2nd ed.
