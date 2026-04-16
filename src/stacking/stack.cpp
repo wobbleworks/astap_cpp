@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../core/globals.h"
+#include "../core/photometry.h"
 
 ///----------------------------------------
 namespace astap::stacking {
@@ -35,26 +36,42 @@ using astap::jd_end;
 
 namespace {
 
-// Background / histogram / star detection helpers, all to be provided
-// by other ported units.
-void get_background([[maybe_unused]] int color,
-                    [[maybe_unused]] const ImageArray& img,
-                    [[maybe_unused]] bool measure_hist,
-                    [[maybe_unused]] bool calc_noise,
-                    [[maybe_unused]] Background& bck) {
-    // TODO: port from astap_main.pas get_background()
+// Background / histogram / star detection — delegates to the ported
+// implementations in astap::core::photometry. Wrappers keep the call sites
+// in analyse_image / plot_stars untouched while the rest of the port moves
+// to the explicit-parameter style.
+inline void get_background(int color,
+                           const ImageArray& img,
+                           bool measure_hist,
+                           bool calc_noise,
+                           Background& bck) {
+    astap::core::get_background(color, img, measure_hist, calc_noise, bck);
 }
 
-void hfd_measure([[maybe_unused]] const ImageArray& img,
-                 [[maybe_unused]] int x,
-                 [[maybe_unused]] int y,
-                 [[maybe_unused]] int annulus,
-                 [[maybe_unused]] int aperture,
-                 [[maybe_unused]] double adu_e,
-                 double& hfd1, double& fwhm, double& snr, double& flux,
-                 double& xc, double& yc) {
-    // TODO: port from astap_main.pas HFD()
-    hfd1 = fwhm = snr = flux = xc = yc = 0.0;
+// Persistent HFD scratch — star_bg / sd_bg / r_aperture carry over between
+// calls in the original source.
+astap::core::HfdScratch& hfd_scratch() {
+    thread_local astap::core::HfdScratch s;
+    return s;
+}
+
+inline void hfd_measure(const ImageArray& img,
+                        int x, int y,
+                        int annulus, int aperture,
+                        double adu_e,
+                        double& hfd1, double& fwhm, double& snr,
+                        double& flux, double& xc, double& yc) {
+    astap::core::HfdResult r;
+    const auto xbinning = (head.xbinning > 0) ? head.xbinning : 1.0;
+    astap::core::HFD(img, x, y, annulus,
+                     static_cast<double>(aperture), adu_e, xbinning,
+                     r, hfd_scratch());
+    hfd1 = r.hfd;
+    fwhm = r.fwhm;
+    snr  = r.snr;
+    flux = r.flux;
+    xc   = r.xc;
+    yc   = r.yc;
 }
 
 void pixel_to_celestial([[maybe_unused]] const Header& hd,

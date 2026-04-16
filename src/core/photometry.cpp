@@ -14,10 +14,14 @@
 
 #include "photometry.h"
 
+#include "globals.h"
+#include "imaging.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <format>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -35,9 +39,8 @@ double Smedian(std::vector<double>& data, int n);
 
 // Forward declarations from sibling modules. Stubs here so this file is
 // self-contained at the type level; the linker resolves to the real
-// implementations once the rest of ASTAP++ is wired up.
-void get_hist(int colour, const ImageArray& img,
-              int (&histogram)[3][65536], int (&his_mean)[3], int nrbits);
+// implementations once the rest of ASTAP++ is wired up. get_hist comes
+// from core/imaging.h (included above).
 void analyse_image(const ImageArray& img, Header& head, int snr_min,
                    int report_mode,
                    int& hfd_counter, Background& bck, double& hfd_med);
@@ -434,12 +437,7 @@ void measure_magnitudes(int annulus_rad,
         std::vector<std::vector<float>>(head.height,
             std::vector<float>(head.width, -1.0f)));
             
-    int histogram[3][65536]{};
-    int his_mean[3]{};
-    auto memo_dummy = std::vector<std::string>{};
-    get_background(0, img_loaded, false, true, bck,
-                   histogram, his_mean, /*nrbits*/16, /*max_stars*/500,
-                   /*filename2*/"", memo_dummy);
+    get_background(0, img_loaded, /*calc_hist=*/false, /*calc_noise_level=*/true, bck);
                    
     auto detection_level = deep ? 5 * bck.noise_level : bck.star_level;
     auto hfd_min = std::max(0.8, min_star_size_stacking);
@@ -796,21 +794,16 @@ void get_background(int colour,
                     const ImageArray& img,
                     bool calc_hist,
                     bool calc_noise_level,
-                    Background& back,
-                    int (&histogram)[3][65536],
-                    int (&his_mean)[3],
-                    int nrbits,
-                    int max_stars_setting,
-                    const std::string& filename2,
-                    std::vector<std::string>& memo) {
+                    Background& back) {
     if (calc_hist) {
-        get_hist(colour, img, histogram, his_mean, nrbits);
+        // Populate the module-level histogram + his_mean for this channel.
+        get_hist(colour, img);
     }
-    
+
     back.backgr = img[0][0][0];
-    
+
     // Find the most common pixel value (mode)
-    auto pixels = 0;
+    auto pixels = std::uint32_t{0};
     auto max_range = his_mean[colour];
     for (auto i = 1; i <= max_range; ++i) {
         if (histogram[colour][i] > pixels) {
@@ -818,16 +811,16 @@ void get_background(int colour,
             back.backgr = i;
         }
     }
-    
+
     // Fall back to mean if it is much higher than the mode
     if (his_mean[colour] > 1.5 * back.backgr) {
-        memo.push_back(filename2 + ", will use mean value " +
-                       std::to_string(static_cast<int>(std::lround(his_mean[colour]))) +
-                       " as background rather then most common value " +
-                       std::to_string(static_cast<int>(std::lround(back.backgr))));
+        memo1_lines.push_back(std::format(
+            "{}, will use mean value {} as background rather then most common value {}",
+            filename2, his_mean[colour],
+            static_cast<int>(std::lround(back.backgr))));
         back.backgr = his_mean[colour];
     }
-    
+
     if (calc_noise_level) {
         const auto width5  = static_cast<int>(img[0][0].size());
         const auto height5 = static_cast<int>(img[0].size());
@@ -835,7 +828,7 @@ void get_background(int colour,
         if ((stepsize % 2) == 0) {
             stepsize += 1;
         }
-        
+
         // Iterative sigma-clipped noise estimation
         auto sd = 99999.0;
         auto iterations = 0;
@@ -863,19 +856,19 @@ void get_background(int colour,
             ++iterations;
         } while (!(((sd_old - sd) < 0.05 * sd) || (iterations >= 7)));
         back.noise_level = sd;
-        
+
         // Compute star detection thresholds from the histogram
         if ((nrbits == 8) || (nrbits == 24)) {
             max_range = 255;
         } else {
             max_range = 65001;
         }
-        
+
         back.star_level = 0;
         back.star_level2 = 0;
         auto i = max_range;
-        const auto factor  =  6 * max_stars_setting;
-        const auto factor2 = 24 * max_stars_setting;
+        const auto factor  =  6LL * max_stars_setting;
+        const auto factor2 = 24LL * max_stars_setting;
         auto above = 0LL;
         while ((back.star_level == 0) && (i > back.backgr + 1)) {
             --i;

@@ -89,15 +89,10 @@ bool calculate_sqm(Header& headx, bool get_bk, bool get_his, int& pedestal2) {
     
     if (headx.mzero > 0.0) {
         if (get_bk) {
-            // TODO(astap-port): unify histogram element type.
-            auto& hist_ref = reinterpret_cast<int(&)[3][65536]>(histogram);
-            auto& mean_ref = reinterpret_cast<int(&)[3]>(his_mean);
             get_background(/*colour=*/0, img_loaded,
                            /*calc_hist=*/get_his,
                            /*calc_noise_level=*/false,
-                           bck, hist_ref, mean_ref,
-                           nrbits, max_stars_setting,
-                           filename2, memo1_lines);
+                           bck);
         }
         
         if (headx.calstat.find('D') != std::string::npos) {

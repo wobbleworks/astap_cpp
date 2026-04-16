@@ -15,9 +15,12 @@
 
 #include "../types.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -116,11 +119,28 @@ void dsspos(double, double, double& ra, double& dec)  { ra = 0; dec = 0; }
 void EQU_GAL(double, double, double& l, double& b)    { l  = 0; b   = 0; }
 
 // -----------------------------------------------------------------------------
-// Smedian with capital S — callers in stack_routines.cpp forward-declared
-// this shape; util.h provides the lowercase `smedian` with a different
-// signature. This adapter isolates the stacking pipeline.
+// Smedian with capital S — used by HFD and the stacking pipeline. Ported
+// from astap_main.pas. Sorts @p list in place (caller tolerates that) and
+// returns the 3-value average around the middle for odd n > 3, the 2-value
+// average for even n, and the single element for n <= 1.
 // -----------------------------------------------------------------------------
-double Smedian(std::vector<double>& /*list*/, int /*len*/) { return 0.0; }
+double Smedian(std::vector<double>& list, int len) {
+    if (len <= 0) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (len == 1) {
+        return list[0];
+    }
+    std::sort(list.begin(), list.begin() + len);
+    const auto mid = (len - 1) / 2;
+    if ((len % 2) == 1) {
+        if (len <= 3) {
+            return list[mid];
+        }
+        return (list[mid - 1] + list[mid] + list[mid + 1]) / 3.0;
+    }
+    return (list[mid] + list[mid + 1]) / 2.0;
+}
 
 // -----------------------------------------------------------------------------
 // Additional signature-mismatch bridges discovered at link time.

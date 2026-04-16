@@ -54,3 +54,11 @@ if(ASTAP_BUILD_CLI)
 		target_include_directories(astap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../stb")
 	endif()
 endif()
+
+# ---- GUI executable (optional, Qt 6 desktop) --------------------------------
+
+option(ASTAP_BUILD_GUI "Build the Qt 6 desktop GUI" OFF)
+
+if(ASTAP_BUILD_GUI)
+	add_subdirectory(gui)
+endif()

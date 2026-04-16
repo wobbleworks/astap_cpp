@@ -1,0 +1,94 @@
+///----------------------------------------
+///      @file main_window.h
+///   @ingroup ASTAP++
+///     @brief Top-level viewer window for the ASTAP++ Qt GUI.
+///   @details Hosts the central @ref ImageViewer + @ref ControlsPanel
+///            splitter, the menu bar, and the status bar (cursor pixel /
+///            celestial position, plus image metadata). Drives plate-solve
+///            jobs through @c QtConcurrent and refreshes WCS readouts on
+///            completion.
+///    @author Created by John Stephen on 4/16/26.
+/// @copyright Copyright © 2026 wobbleworks.com. All rights reserved.
+///----------------------------------------
+
+#pragma once
+
+#include <QFutureWatcher>
+#include <QMainWindow>
+#include <QPointF>
+#include <memory>
+
+class QLabel;
+class QMenu;
+class QCloseEvent;
+class QDragEnterEvent;
+class QDropEvent;
+
+QT_BEGIN_NAMESPACE
+namespace Ui {
+class MainWindow;
+}
+QT_END_NAMESPACE
+
+///----------------------------------------
+namespace astap::gui {
+///----------------------------------------
+
+///----------------------------------------
+/// @class MainWindow
+/// @brief Main viewer window. Hosts the image canvas, menu, and status bar.
+///----------------------------------------
+
+class MainWindow final : public QMainWindow {
+	Q_OBJECT
+
+public:
+	explicit MainWindow(QWidget* parent = nullptr);
+	~MainWindow() override;
+
+private slots:
+	void openFile();
+	void showAbout();
+	void solveImage();
+	void onSolveFinished();
+	void onCursorMoved(QPointF imagePos, bool inImage);
+	void showSolverLog();
+	void openRecent();
+	void analyseStars();
+	void onAnalyseFinished();
+
+protected:
+	void closeEvent(QCloseEvent* event) override;
+	void dragEnterEvent(QDragEnterEvent* event) override;
+	void dropEvent(QDropEvent* event) override;
+
+private:
+	void loadImageAt(const QString& path);
+	void rebuildRecentMenu();
+	void rememberRecent(const QString& path);
+
+	void saveAppSettings() const;
+	void restoreAppSettings();
+
+	void updateCursorReadout(QPointF imagePos, bool inImage);
+	void updateWcsReadout();
+	void ensureLogWindow();
+
+	std::unique_ptr<Ui::MainWindow> _ui;
+	class LogWindow* _logWindow = nullptr;
+	class QMenu* _recentMenu = nullptr;
+
+	// Permanent status-bar widgets (cursor pixel, cursor celestial, image dims).
+	QLabel* _cursorPixelLabel = nullptr;
+	QLabel* _cursorCelestialLabel = nullptr;
+	QLabel* _imageInfoLabel = nullptr;
+
+	// Background solver job, if one is running.
+	std::unique_ptr<QFutureWatcher<bool>> _solveWatcher;
+
+	// Background star-detection job, if one is running.
+	struct DetectionJob;
+	std::unique_ptr<DetectionJob> _analyseJob;
+};
+
+} // namespace astap::gui

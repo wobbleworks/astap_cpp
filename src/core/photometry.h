@@ -226,30 +226,20 @@ void local_sd(int x1, int y1, int x2, int y2, int col,
                                               
 ///----------------------------------------
 /// @brief Compute background level, noise, and star-detection thresholds.
+/// @details Uses the module-level @c histogram, @c his_mean, @c nrbits,
+///          @c max_stars_setting, @c filename2 and @c memo1_lines globals.
 /// @param colour            Colour channel index.
 /// @param img               Read-only image data.
 /// @param calc_hist         Whether to recompute the histogram first.
 /// @param calc_noise_level  Whether to compute noise and star levels.
 /// @param[out] back         Background statistics output.
-/// @param histogram         Shared 3-channel histogram array.
-/// @param his_mean          Shared per-channel mean values.
-/// @param nrbits            Bit depth of the image (8, 16, 24).
-/// @param max_stars_setting Maximum stars tuning knob.
-/// @param filename2         Filename for log messages.
-/// @param memo              Log message output.
 ///----------------------------------------
 
 void get_background(int colour,
                     const ImageArray& img,
                     bool calc_hist,
                     bool calc_noise_level,
-                    Background& back,
-                    int (&histogram)[3][65536],
-                    int (&his_mean)[3],
-                    int nrbits,
-                    int max_stars_setting,
-                    const std::string& filename2,
-                    std::vector<std::string>& memo);
+                    Background& back);
                     
 ///----------------------------------------
 /// @brief Retrieve the ADU-to-electron conversion factor from FITS metadata.

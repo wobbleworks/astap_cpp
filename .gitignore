@@ -1,5 +1,6 @@
 # CMake build artifacts
 build/
+build-gui/
 build-xcf/
 tests/build/
 lib/
