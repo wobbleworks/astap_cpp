@@ -63,8 +63,11 @@ visionOS, visionOS Simulator, watchOS, watchOS Simulator, and macOS
 - C++23 compiler (tested with Apple Clang 17)
 - CMake 3.20+
 - Xcode Command Line Tools (for Apple framework builds)
-- [doctest](https://github.com/doctest/doctest) at
-  `../third_party/doctest/doctest/doctest.h` (for tests only)
+- [doctest](https://github.com/doctest/doctest) as a sibling directory
+  (`../doctest/doctest/doctest.h`) for tests
+- Optional: [stb](https://github.com/nothings/stb) as a sibling
+  directory (`../stb/stb_image.h`) so the CLI picks up PNG / JPEG / TGA
+  decoding
 
 ## License
 
