@@ -58,8 +58,10 @@ public:
 		float max = 0.0f;
 		float mean = 0.0f;
 		float median = 0.0f;
-		float stddev = 0.0f;
-		float background = 0.0f;  // histogram peak (modal value)
+		float stddev = 0.0f;      // global σ (all pixels, useful for stats)
+		float noise = 0.0f;       // sigma-clipped sky noise (from engine)
+		float background = 0.0f;  // histogram mode (from engine)
+		float starLevel = 0.0f;   // detection threshold above background
 		std::uint64_t count = 0;
 	};
 

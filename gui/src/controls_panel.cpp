@@ -106,9 +106,9 @@ ControlsPanel::ControlsPanel(QWidget* parent) :
 	// Statistics group
 	auto* statsGroup = new QGroupBox(tr("Statistics"), this);
 	auto* statsLayout = new QVBoxLayout(statsGroup);
-	_statsTable = new QTableWidget(0, 6, statsGroup);
+	_statsTable = new QTableWidget(0, 7, statsGroup);
 	_statsTable->setHorizontalHeaderLabels(
-		{tr("Ch"), tr("Min"), tr("Max"), tr("Mean"), tr("Median"), tr("σ / Bgnd")});
+		{tr("Ch"), tr("Min"), tr("Max"), tr("Mean"), tr("Bgnd"), tr("Noise"), tr("Stars")});
 	_statsTable->verticalHeader()->setVisible(false);
 	_statsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	_statsTable->setSelectionMode(QAbstractItemView::NoSelection);
@@ -304,8 +304,9 @@ void ControlsPanel::refreshStats() {
 		setCell(1, fmt(st.min));
 		setCell(2, fmt(st.max));
 		setCell(3, fmt(st.mean));
-		setCell(4, fmt(st.median));
-		setCell(5, QStringLiteral("%1 / %2").arg(fmt(st.stddev), fmt(st.background)));
+		setCell(4, fmt(st.background));
+		setCell(5, fmt(st.noise));
+		setCell(6, fmt(st.starLevel));
 	}
 
 	_statsTable->resizeColumnsToContents();

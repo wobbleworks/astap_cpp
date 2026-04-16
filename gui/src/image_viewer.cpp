@@ -14,6 +14,8 @@
 #include <QResizeEvent>
 #include <QWheelEvent>
 
+#include "../../src/core/photometry.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -421,19 +423,15 @@ void ImageViewer::computeStatistics() {
 			running += inBin;
 		}
 
-		// Background — peak of the histogram, ignoring bin 0 (pad / oversize
-		// pixels) and bin 255 (saturation) so a saturated image still
-		// estimates sky.
-		std::uint32_t peak = 0;
-		int peakBin = 1;
-		for (int i = 1; i < 255; ++i) {
-			const auto v = bins[static_cast<std::size_t>(i)];
-			if (v > peak) {
-				peak = v;
-				peakBin = i;
-			}
-		}
-		s.background = static_cast<float>((peakBin + 0.5) * (kFullRange / 256.0));
+		// Background, noise, star-level: delegate to the engine's
+		// get_background which uses the full 65536-bin histogram, iterative
+		// sigma-clipped noise estimation, and proper star-level thresholds.
+		astap::Background bck{};
+		astap::core::get_background(c, _image,
+			/*calc_hist=*/true, /*calc_noise_level=*/true, bck);
+		s.background = static_cast<float>(bck.backgr);
+		s.noise = static_cast<float>(bck.noise_level);
+		s.starLevel = static_cast<float>(bck.star_level);
 
 		if (mn < combinedLo) {
 			combinedLo = mn;
@@ -452,20 +450,19 @@ void ImageViewer::computeStatistics() {
 		_sampleMax = combinedHi;
 	}
 
-	// Default stretch: proper background + σ heuristic. For typical
-	// astronomical exposures this produces an immediately usable display.
-	// Use the channel with the largest σ (darker channels tend to show
-	// noise worst if we clip them).
+	// Default stretch: background + sigma-clipped noise from the engine.
+	// Uses the channel with the highest noise (typically the noisiest
+	// filter, often red) so no channel gets crushed.
 	auto bestChannel = 0;
 	for (int c = 1; c < numChannels; ++c) {
-		if (_stats[c].stddev > _stats[bestChannel].stddev) {
+		if (_stats[c].noise > _stats[bestChannel].noise) {
 			bestChannel = c;
 		}
 	}
 	const auto& ref = _stats[bestChannel];
 
-	float lo = ref.background - 1.0f * ref.stddev;
-	float hi = ref.background + 7.0f * ref.stddev;
+	float lo = ref.background - 1.0f * ref.noise;
+	float hi = ref.background + 7.0f * ref.noise;
 	// Guard rails for degenerate inputs (flat fields, all-black frames).
 	lo = std::clamp(lo, 0.0f, kFullRange);
 	hi = std::clamp(hi, 0.0f, kFullRange);
