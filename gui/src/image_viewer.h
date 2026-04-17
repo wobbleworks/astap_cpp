@@ -156,6 +156,15 @@ public:
 	void setAnnotations(std::vector<AnnotationMarker> annotations);
 	void clearAnnotations();
 	[[nodiscard]] const std::vector<AnnotationMarker>& annotations() const noexcept { return _annotations; }
+
+	void setConstellations(ConstellationOverlay overlay);
+	void clearConstellations();
+	///@}
+
+	/// @name Saturation
+	///@{
+	[[nodiscard]] float saturation() const noexcept { return _saturation; }
+	void setSaturation(float sat);
 	///@}
 
 signals:
@@ -218,8 +227,11 @@ private:
 	QPoint _panAnchor;
 	QPointF _panAnchorOffset;
 
+	float _saturation = 1.0f;
+
 	std::vector<DetectedStar> _stars;
 	std::vector<AnnotationMarker> _annotations;
+	ConstellationOverlay _constellations;
 };
 
 } // namespace astap::gui

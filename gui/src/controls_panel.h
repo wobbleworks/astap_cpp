@@ -77,6 +77,7 @@ private:
 	QCheckBox* _flipHCheck = nullptr;
 	QCheckBox* _flipVCheck = nullptr;
 
+	QSlider* _satSlider = nullptr;
 	QTableWidget* _statsTable = nullptr;
 
 	bool _suppress = false;  // re-entrancy guard during programmatic updates

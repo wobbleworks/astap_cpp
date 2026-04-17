@@ -10,9 +10,11 @@
 #include "qt_image_decoder.h"
 
 #include <QApplication>
+#include <QStyleFactory>
 
 int main(int argc, char* argv[]) {
 	QApplication app(argc, argv);
+	QApplication::setStyle(QStyleFactory::create("Fusion"));
 	QCoreApplication::setOrganizationName("wobbleworks");
 	QCoreApplication::setOrganizationDomain("wobbleworks.com");
 	QCoreApplication::setApplicationName("ASTAP");

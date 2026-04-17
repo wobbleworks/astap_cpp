@@ -95,12 +95,25 @@ ControlsPanel::ControlsPanel(QWidget* parent) :
 
 	// Display group
 	auto* displayGroup = new QGroupBox(tr("Display"), this);
-	auto* displayLayout = new QHBoxLayout(displayGroup);
+	auto* displayLayout = new QVBoxLayout(displayGroup);
+	auto* flipRow = new QHBoxLayout();
 	_flipHCheck = new QCheckBox(tr("Flip H"), displayGroup);
 	_flipVCheck = new QCheckBox(tr("Flip V"), displayGroup);
-	displayLayout->addWidget(_flipHCheck);
-	displayLayout->addWidget(_flipVCheck);
-	displayLayout->addStretch(1);
+	flipRow->addWidget(_flipHCheck);
+	flipRow->addWidget(_flipVCheck);
+	flipRow->addStretch(1);
+	displayLayout->addLayout(flipRow);
+
+	auto* satRow = new QHBoxLayout();
+	auto* satLabel = new QLabel(tr("Saturation"), displayGroup);
+	_satSlider = new QSlider(Qt::Horizontal, displayGroup);
+	_satSlider->setRange(0, 300);
+	_satSlider->setValue(100);
+	_satSlider->setTickInterval(50);
+	satRow->addWidget(satLabel);
+	satRow->addWidget(_satSlider, 1);
+	displayLayout->addLayout(satRow);
+
 	root->addWidget(displayGroup);
 
 	// Statistics group
@@ -132,6 +145,11 @@ ControlsPanel::ControlsPanel(QWidget* parent) :
 	connect(_autoButton, &QPushButton::clicked, this, &ControlsPanel::onAutoClicked);
 	connect(_flipHCheck, &QCheckBox::toggled, this, &ControlsPanel::onFlipHToggled);
 	connect(_flipVCheck, &QCheckBox::toggled, this, &ControlsPanel::onFlipVToggled);
+	connect(_satSlider, &QSlider::valueChanged, this, [this](int v) {
+		if (!_suppress && _viewer) {
+			_viewer->setSaturation(v / 100.0f);
+		}
+	});
 }
 
 void ControlsPanel::attachViewer(ImageViewer* viewer) {
@@ -266,6 +284,7 @@ void ControlsPanel::syncFromViewer() {
 	_logCheck->setChecked(_viewer->logarithmicStretch());
 	_flipHCheck->setChecked(_viewer->flipHorizontal());
 	_flipVCheck->setChecked(_viewer->flipVertical());
+	_satSlider->setValue(static_cast<int>(_viewer->saturation() * 100.0f + 0.5f));
 	_suppress = false;
 }
 

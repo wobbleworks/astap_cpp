@@ -79,6 +79,7 @@ private:
 
 	std::unique_ptr<Ui::MainWindow> _ui;
 	class LogWindow* _logWindow = nullptr;
+	class StackWindow* _stackWindow = nullptr;
 	class QMenu* _recentMenu = nullptr;
 
 	// Permanent status-bar widgets (cursor pixel, cursor celestial, image dims).

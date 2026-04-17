@@ -101,6 +101,8 @@
     <addaction name="separator"/>
     <addaction name="actionSolve"/>
     <addaction name="actionShowSolverLog"/>
+    <addaction name="separator"/>
+    <addaction name="actionStack"/>
    </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
@@ -195,6 +197,14 @@
    </property>
    <property name="checked">
     <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionStack">
+   <property name="text">
+    <string>&amp;Stack…</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+T</string>
    </property>
   </action>
   <action name="actionSave">

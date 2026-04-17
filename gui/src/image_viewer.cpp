@@ -120,6 +120,27 @@ void ImageViewer::clearAnnotations() {
 	update();
 }
 
+void ImageViewer::setConstellations(ConstellationOverlay overlay) {
+	_constellations = std::move(overlay);
+	update();
+}
+
+void ImageViewer::clearConstellations() {
+	_constellations.lines.clear();
+	_constellations.labels.clear();
+	update();
+}
+
+void ImageViewer::setSaturation(float sat) {
+	sat = std::clamp(sat, 0.0f, 3.0f);
+	if (sat == _saturation) {
+		return;
+	}
+	_saturation = sat;
+	scheduleRender();
+	emit stretchChanged();
+}
+
 void ImageViewer::clear() {
 	// Drop everything
 	_image.clear();
@@ -314,6 +335,43 @@ void ImageViewer::paintEvent(QPaintEvent* event) {
 			painter.setPen(QColor(255, 200, 60, 230));
 			const auto labelOffset = std::max(8.0, majorPx + 4.0);
 			painter.drawText(QPointF(vx + 4, vy - labelOffset), ann.name);
+		}
+	}
+
+	// Constellation stick-figure overlay.
+	if ((!_constellations.lines.empty() || !_constellations.labels.empty())
+			&& _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		// Lines
+		QPen linePen(QColor(100, 180, 255, 140));
+		linePen.setWidthF(1.0);
+		painter.setPen(linePen);
+		painter.setBrush(Qt::NoBrush);
+		for (const auto& seg : _constellations.lines) {
+			painter.drawLine(toViewport(seg.x1, seg.y1),
+			                 toViewport(seg.x2, seg.y2));
+		}
+
+		// Labels
+		QFont cFont = painter.font();
+		cFont.setPointSizeF(std::max(7.0, 8.0 * std::min(1.0, effectiveZoom)));
+		painter.setFont(cFont);
+		painter.setPen(QColor(100, 180, 255, 180));
+		for (const auto& lbl : _constellations.labels) {
+			painter.drawText(toViewport(lbl.x, lbl.y) + QPointF(4, -4), lbl.name);
 		}
 	}
 }
@@ -552,17 +610,19 @@ void ImageViewer::renderImage() {
 	// Render to RGB888. Channel 0 is the gray fallback for mono sources.
 	_rendered = QImage(w, h, QImage::Format_RGB888);
 
-	const auto& r = _image[0];
-	const auto& g = (numChannels >= 2) ? _image[1] : _image[0];
-	const auto& b = (numChannels >= 3) ? _image[2] : _image[0];
+	const auto& rCh = _image[0];
+	const auto& gCh = (numChannels >= 2) ? _image[1] : _image[0];
+	const auto& bCh = (numChannels >= 3) ? _image[2] : _image[0];
+	const auto applySat = (numChannels >= 3 && _saturation != 1.0f);
+	const auto sat = _saturation;
 
-	auto stretch = [lo, invSpan, invLog, this](float v) -> std::uint8_t {
+	auto stretchVal = [lo, invSpan, invLog, this](float v) -> float {
 		auto t = (v - lo) * invSpan;
 		if (t <= 0.0f) {
-			return 0;
+			return 0.0f;
 		}
 		if (t >= 1.0f) {
-			return 255;
+			return 1.0f;
 		}
 		if (_logStretch) {
 			t = std::log1p(t * 700.0f) * invLog;
@@ -570,7 +630,7 @@ void ImageViewer::renderImage() {
 				t = 1.0f;
 			}
 		}
-		return toByte(t);
+		return t;
 	};
 
 	// FITS counts y from the bottom; QImage from the top. Apply user flips
@@ -578,14 +638,26 @@ void ImageViewer::renderImage() {
 	for (int y = 0; y < h; ++y) {
 		const auto srcY = _flipV ? y : (h - 1) - y;
 		auto* dst = _rendered.scanLine(y);
-		const auto& rrow = r[srcY];
-		const auto& grow = g[srcY];
-		const auto& brow = b[srcY];
+		const auto& rrow = rCh[srcY];
+		const auto& grow = gCh[srcY];
+		const auto& brow = bCh[srcY];
 		for (int x = 0; x < w; ++x) {
 			const auto srcX = _flipH ? (w - 1) - x : x;
-			dst[3 * x + 0] = stretch(rrow[srcX]);
-			dst[3 * x + 1] = stretch(grow[srcX]);
-			dst[3 * x + 2] = stretch(brow[srcX]);
+			auto rv = stretchVal(rrow[srcX]);
+			auto gv = stretchVal(grow[srcX]);
+			auto bv = stretchVal(brow[srcX]);
+
+			if (applySat) {
+				// Adjust saturation in luminance-preserving way.
+				const auto lum = 0.2126f * rv + 0.7152f * gv + 0.0722f * bv;
+				rv = std::clamp(lum + (rv - lum) * sat, 0.0f, 1.0f);
+				gv = std::clamp(lum + (gv - lum) * sat, 0.0f, 1.0f);
+				bv = std::clamp(lum + (bv - lum) * sat, 0.0f, 1.0f);
+			}
+
+			dst[3 * x + 0] = toByte(rv);
+			dst[3 * x + 1] = toByte(gv);
+			dst[3 * x + 2] = toByte(bv);
 		}
 	}
 }

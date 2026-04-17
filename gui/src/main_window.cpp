@@ -12,6 +12,7 @@
 #include "image_viewer.h"
 #include "log_window.h"
 #include "solve_dialog.h"
+#include "stack_window.h"
 #include "star_detector.h"
 #include "ui_main_window.h"
 
@@ -108,9 +109,31 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionShowSolverLog, &QAction::triggered, this, &MainWindow::showSolverLog);
 	connect(_ui->actionAnalyse, &QAction::triggered, this, &MainWindow::analyseStars);
 	connect(_ui->actionAnnotate, &QAction::triggered, this, &MainWindow::annotateDeepSky);
+	connect(_ui->actionStack, &QAction::triggered, this, [this]() {
+		if (!_stackWindow) {
+			_stackWindow = new StackWindow(this);
+			_stackWindow->setViewer(_ui->imageViewer);
+			connect(_stackWindow, &StackWindow::stackCompleted,
+				this, [this](int n) {
+					setWindowTitle(tr("Stacked %1 frames — ASTAP").arg(n));
+					_imageInfoLabel->setText(
+						tr("%1 × %2  ·  %3 ch  ·  %4 frames")
+							.arg(astap::head.width)
+							.arg(astap::head.height)
+							.arg(astap::head.naxis3 > 0 ? astap::head.naxis3 : 1)
+							.arg(n));
+					statusBar()->showMessage(
+						tr("Stacked %1 frames (simple average)").arg(n));
+				});
+		}
+		_stackWindow->show();
+		_stackWindow->raise();
+		_stackWindow->activateWindow();
+	});
 	connect(_ui->actionClearMarkers, &QAction::triggered, this, [this]() {
 		_ui->imageViewer->clearStarMarkers();
 		_ui->imageViewer->clearAnnotations();
+		_ui->imageViewer->clearConstellations();
 	});
 
 	connect(_ui->actionZoomIn, &QAction::triggered,
@@ -601,11 +624,15 @@ void MainWindow::annotateDeepSky() {
 
 	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
 	const auto markers = annotate_image(astap::head);
+	const auto consOverlay = build_constellation_overlay(astap::head);
 	QGuiApplication::restoreOverrideCursor();
 
 	_ui->imageViewer->setAnnotations(markers);
+	_ui->imageViewer->setConstellations(consOverlay);
 	statusBar()->showMessage(
-		tr("%1 deep-sky objects annotated").arg(markers.size()));
+		tr("%1 deep-sky objects, %2 constellation lines")
+			.arg(markers.size())
+			.arg(consOverlay.lines.size()));
 }
 
 void MainWindow::showSolverLog() {

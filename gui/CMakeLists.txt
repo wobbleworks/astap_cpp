@@ -72,6 +72,8 @@ set(GUI_SOURCES
 	src/star_detector.h
 	src/annotation_scanner.cpp
 	src/annotation_scanner.h
+	src/stack_window.cpp
+	src/stack_window.h
 	src/qt_image_decoder.cpp
 	src/qt_image_decoder.h
 )
