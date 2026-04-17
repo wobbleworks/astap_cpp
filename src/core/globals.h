@@ -149,6 +149,14 @@ extern bool   force_oversize;              ///< @brief Force oversize solving.
 extern bool   add_sip;                     ///< @brief Add SIP distortion to solution.
 extern bool   check_pattern_filter;        ///< @brief Pattern filter check enabled.
 
+/// MARK: Stacking settings
+
+extern bool   use_manual_align;            ///< @brief Align via manual-marked reference star.
+extern bool   use_ephemeris_alignment;     ///< @brief Align via ephemeris (comet/asteroid).
+extern bool   use_astrometry_internal;     ///< @brief Align via per-frame plate solve.
+extern double hfd_min_setting;             ///< @brief Minimum star HFD for stacking (0 = auto).
+extern double sigma_clip_factor;           ///< @brief Stdev factor for sigma-clip rejection.
+
 /// MARK: Memos
 
 extern std::vector<std::string> memo1_lines;   ///< @brief FITS header memo.

@@ -15,8 +15,19 @@
 #include <string>
 #include <vector>
 
+#include "stack.h"
+#include "../core/demosaic.h"
+#include "../core/fits.h"
 #include "../core/globals.h"
+#include "../core/photometry.h"
+#include "../core/util.h"
+#include "../core/wcs.h"
 #include "../solving/star_align.h"
+
+// Smedian isn't declared in any header; link_stubs.cpp provides the body.
+namespace astap::core {
+double Smedian(std::vector<double>& list, int len);
+}  // namespace astap::core
 
 ///----------------------------------------
 namespace astap::stacking {
@@ -38,61 +49,21 @@ using astap::solving::report_binning;
 /// MARK: Forward declarations (TODO: replace with real headers)
 ///----------------------------------------
 
-// FITS I/O stubs.
-bool load_fits(const std::string& filename,
-               bool light,
-               bool load_data,
-               bool update_memo,
-               int  hdu,
-               /*lines*/ void* lines,
-               Header& h,
-               ImageArray& img);
-               
-bool save_fits(const ImageArray& img,
-               /*lines*/ void* lines,
-               const std::string& filename,
-               int bits,
-               bool overwrite);
-               
-void apply_dark_and_flat(ImageArray& img, Header& h);
+// Engine delegates pulled in from the real implementations.
+using astap::core::load_fits;
+using astap::core::save_fits;
+using astap::core::get_background;
+using astap::core::local_sd;
+using astap::core::mode;
+using astap::core::pixel_to_celestial;
+using astap::core::celestial_to_pixel;
+using astap::core::Smedian;
+using astap::core::smedian;
+using astap::core::strtofloat1;
+using astap::core::strtofloat2;
+using astap::core::strtoint2;
+
 void demosaic_bayer(ImageArray& img);
-
-void get_background(int channel,
-                    const ImageArray& img,
-                    bool update_hist,
-                    bool calculate_noise_level,
-                    Background& out);
-                    
-void black_spot_filter(ImageArray& img);
-
-// Statistics / utility helpers. TODO: port.
-double Smedian(std::vector<double>& data, int n);
-double smedian(const std::array<double, 4>& values, int n);
-double median_background(const ImageArray& img, int col,
-                         int w, int h, int fitsX, int fitsY);
-void   local_sd(int x0, int y0, int x1, int y1, int col,
-                const ImageArray& img,
-                double& noise, double& mean, int& iterations);
-double mode(const ImageArray& img, bool ellipse_shape, int col,
-            int x0, int x1, int y0, int y1,
-            double clip, int& greylevels);
-            
-bool update_solution_and_save(ImageArray& img, Header& h, void* lines);
-
-void pixel_to_celestial(const Header& h, double fitsX, double fitsY,
-                        int formalism, double& ra, double& dec);
-void celestial_to_pixel(const Header& h, double ra, double dec,
-                        double& fitsX, double& fitsY);
-                        
-void date_to_jd(const std::string& date_obs,
-                const std::string& date_avg,
-                double exposure);
-                
-// Numeric conversions (tolerate locale-independent dotted decimals and empty
-// strings).
-double strtofloat1(const std::string& s);
-double strtofloat2(const std::string& s);
-int    strtoint2(const std::string& s, int dflt);
 
 // UI / progress (TODO: replace with ProgressReporter).
 void memo2_message(const std::string& msg);
@@ -445,10 +416,9 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
     auto img_temp = ImageArray{};
     auto img_average = ImageArray{};
     
-    // TODO: use_manual_align etc. read via UI -> ProgressReporter/Settings.
-    use_manual_align        = /*stackmenu1.use_manual_alignment1.checked*/ false;
-    use_ephemeris_alignment = /*stackmenu1.use_ephemeris_alignment1.checked*/ false;
-    use_astrometry_internal = /*stackmenu1.use_astrometry_alignment1.checked*/ false;
+    use_manual_align        = astap::use_manual_align;
+    use_ephemeris_alignment = astap::use_ephemeris_alignment;
+    use_astrometry_internal = astap::use_astrometry_internal;
     hfd_min = std::max(0.8, strtofloat2(/*stackmenu1.min_star_size_stacking1.caption*/ ""));
     max_stars = strtoint2(/*stackmenu1.max_stars1.text*/ "", 500);
     use_sip   = /*stackmenu1.add_sip1.checked*/ false;
@@ -516,7 +486,7 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
@@ -577,7 +547,7 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
             if (use_astrometry_internal) {
                 memo2_message("Preparing astrometric solution for interim file: " + filename2);
                 if (head.cd1_1 == 0.0) {
-                    solution = update_solution_and_save(img_loaded, head, nullptr);
+                    solution = update_solution_and_save(img_loaded, head, astap::memo1_lines);
                 } else {
                     solution = true;
                 }
@@ -616,7 +586,7 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
                                            true, starlist2, warning);
                         find_quads(starlist2, quad_star_distances2);
-                        if (find_offset_and_rotation(3, strtofloat2(/*quad_tolerance1.text*/ ""))) {
+                        if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                          + std::to_string(nr_references2)
                                          + " quads selected matching within tolerance. "
@@ -823,12 +793,12 @@ void stack_average(int process_as_osc,
     auto img_temp = ImageArray{};
     auto img_average = ImageArray{};
     
-    use_manual_align        = /*use_manual_alignment1*/ false;
-    use_ephemeris_alignment = /*use_ephemeris_alignment1*/ false;
-    use_astrometry_internal = /*use_astrometry_alignment1*/ false;
-    hfd_min   = std::max(0.8, strtofloat2(""));
-    max_stars = strtoint2("", 500);
-    use_sip   = false;
+    use_manual_align        = astap::use_manual_align;
+    use_ephemeris_alignment = astap::use_ephemeris_alignment;
+    use_astrometry_internal = astap::use_astrometry_internal;
+    hfd_min   = std::max(0.8, astap::hfd_min_setting);
+    max_stars = astap::max_stars_setting;
+    use_sip   = astap::add_sip;
     
     counter = 0;
     sum_exp = 0.0;
@@ -849,7 +819,7 @@ void stack_average(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
@@ -882,7 +852,7 @@ void stack_average(int process_as_osc,
             if (!use_sip) {
                 a_order = 0;
             }
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             
             memo2_message("Adding file: " + std::to_string(counter + 1)
                           + " \"" + filename2 + "\" to average.");
@@ -945,7 +915,7 @@ void stack_average(int process_as_osc,
                         }
                         head.pedestal = background_correction;
                         find_quads(starlist2, quad_star_distances2);
-                        if (find_offset_and_rotation(3, strtofloat2(""))) {
+                        if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                           + std::to_string(nr_references2)
                                           + " quads selected. " + solution_str);
@@ -1112,7 +1082,7 @@ void stack_mosaic(int process_as_osc,
         if (files_to_process[c].name.empty()) {
             continue;
         }
-        if (!load_fits(files_to_process[c].name, true, false, false, 0, nullptr, head, img_loaded)) {
+        if (!load_fits(files_to_process[c].name, true, false, false, 0, astap::memo1_lines, head, img_loaded)) {
             memo2_message("Error loading " + filename2);
             return;
         }
@@ -1156,7 +1126,7 @@ void stack_mosaic(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
@@ -1458,13 +1428,13 @@ void stack_sigmaclip(int process_as_osc,
     auto img_final = ImageArray{};
     auto img_variance = ImageArray{};
     
-    variance_factor = sqr(strtofloat2(/*sd_factor1.text*/ ""));
-    hfd_min   = std::max(0.8, strtofloat2(""));
-    max_stars = strtoint2("", 500);
-    use_sip   = false;
-    use_manual_align        = false;
-    use_ephemeris_alignment = false;
-    use_astrometry_internal = false;
+    variance_factor = sqr(astap::sigma_clip_factor);
+    hfd_min   = std::max(0.8, astap::hfd_min_setting);
+    max_stars = astap::max_stars_setting;
+    use_sip   = astap::add_sip;
+    use_manual_align        = astap::use_manual_align;
+    use_ephemeris_alignment = astap::use_ephemeris_alignment;
+    use_astrometry_internal = astap::use_astrometry_internal;
     
     counter = 0;
     sum_exp = 0.0;
@@ -1490,7 +1460,7 @@ void stack_sigmaclip(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
@@ -1519,7 +1489,7 @@ void stack_sigmaclip(int process_as_osc,
                 a_order = 0;
             }
             
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             
             memo2_message("Adding light file: " + std::to_string(counter + 1)
                           + " \"" + filename2 + "\" dark compensated.");
@@ -1573,7 +1543,7 @@ void stack_sigmaclip(int process_as_osc,
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
                                            true, starlist2, warning);
                         find_quads(starlist2, quad_star_distances2);
-                        if (find_offset_and_rotation(3, strtofloat2(""))) {
+                        if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                           + std::to_string(nr_references2) + " quads. "
                                           + solution_str);
@@ -1675,12 +1645,12 @@ void stack_sigmaclip(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
             
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             
             memo2_message("Calculating pixels sigma of light file "
                           + std::to_string(counter + 1) + " " + filename2);
@@ -1787,11 +1757,11 @@ void stack_sigmaclip(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             
             memo2_message("Combining " + std::to_string(counter + 1) + " \""
                           + filename2 + "\", ignoring outliers.");
@@ -1960,11 +1930,11 @@ void stack_comet(int process_as_osc,
     auto img_final = ImageArray{};
     auto img_variance = ImageArray{};
     
-    hfd_min = std::max(0.8, strtofloat2(""));
-    use_sip = false;
-    use_manual_align = false;
-    use_ephemeris_alignment = false;
-    use_astrometry_internal = false;
+    hfd_min = std::max(0.8, astap::hfd_min_setting);
+    use_sip = astap::add_sip;
+    use_manual_align = astap::use_manual_align;
+    use_ephemeris_alignment = astap::use_ephemeris_alignment;
+    use_astrometry_internal = astap::use_astrometry_internal;
     
     counter = 0;
     sum_exp = 0.0;
@@ -1988,7 +1958,7 @@ void stack_comet(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
@@ -2017,7 +1987,7 @@ void stack_comet(int process_as_osc,
                 a_order = 0;
             }
             
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             memo2_message("Registrating drifting stars movements: "
                           + std::to_string(counter + 1) + " \"" + filename2 + "\"");
             if (esc_pressed) {
@@ -2141,11 +2111,11 @@ void stack_comet(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, !init, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, !init, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             
             date_to_jd(head.date_obs, head.date_avg, head.exposure);
             jd_fraction = static_cast<float>(jd_mid - std::floor(jd_mid));
@@ -2308,12 +2278,12 @@ void calibration_and_alignment(int process_as_osc,
     auto img_temp = ImageArray{};
     auto img_average = ImageArray{};
     
-    hfd_min   = std::max(0.8, strtofloat2(""));
-    max_stars = strtoint2("", 500);
-    use_sip   = false;
-    use_manual_align        = false;
-    use_ephemeris_alignment = false;
-    use_astrometry_internal = false;
+    hfd_min   = std::max(0.8, astap::hfd_min_setting);
+    max_stars = astap::max_stars_setting;
+    use_sip   = astap::add_sip;
+    use_manual_align        = astap::use_manual_align;
+    use_ephemeris_alignment = astap::use_ephemeris_alignment;
+    use_astrometry_internal = astap::use_astrometry_internal;
     
     counter = 0;
     sum_exp = 0.0;
@@ -2330,7 +2300,7 @@ void calibration_and_alignment(int process_as_osc,
                 memo2_message("ESC pressed.");
                 return;
             }
-            if (!load_fits(filename2, true, true, true, 0, nullptr, head, img_loaded)) {
+            if (!load_fits(filename2, true, true, true, 0, astap::memo1_lines, head, img_loaded)) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
@@ -2358,7 +2328,7 @@ void calibration_and_alignment(int process_as_osc,
             if (!use_sip) {
                 a_order = 0;
             }
-            apply_dark_and_flat(img_loaded, head);
+            (void)apply_dark_and_flat(img_loaded, head);
             
             memo2_message("Calibrating and aligning file: "
                           + std::to_string(counter + 1) + " \"" + filename2 + "\"");
@@ -2438,7 +2408,7 @@ void calibration_and_alignment(int process_as_osc,
                         }
                         head.pedestal = background_correction;
                         find_quads(starlist2, quad_star_distances2);
-                        if (find_offset_and_rotation(3, strtofloat2(""))) {
+                        if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                           + std::to_string(nr_references2) + " quads. "
                                           + solution_str);
@@ -2536,11 +2506,11 @@ void calibration_and_alignment(int process_as_osc,
             // TODO: update header comment / pedestal / counters.
             
             if (nrbits == 16) {
-                if (!save_fits(img_loaded, nullptr, filename2, 16, true)) {
+                if (!save_fits(img_loaded, astap::memo1_lines, filename2, 16, true)) {
                     return;
                 }
             } else {
-                if (!save_fits(img_loaded, nullptr, filename2, -32, true)) {
+                if (!save_fits(img_loaded, astap::memo1_lines, filename2, -32, true)) {
                     return;
                 }
             }
@@ -2559,55 +2529,46 @@ void calibration_and_alignment(int process_as_osc,
 /// MARK: Stub definitions
 ///----------------------------------------
 
-// These exist solely to satisfy the linker while the full stacking pipeline
-// hasn't been wired to the real astap::core implementations. Each function
-// is a no-op that returns a sentinel value -- the stacker bodies gate on
-// these and degrade gracefully when the real backends aren't connected.
-// When the cross-namespace adapters land, drop this block.
+// Thin UI-layer adapters. The engine computation lives elsewhere; these
+// wrappers resolve global state and forward. UI sinks (memo / progress /
+// listview) remain no-ops until the GUI installs real callbacks — see
+// set_memo2_sink() etc.
 
-bool load_fits(const std::string& /*filename*/, bool /*light*/,
-               bool /*load_data*/, bool /*update_memo*/, int /*hdu*/,
-               void* /*lines*/, Header& /*h*/, ImageArray& /*img*/) {
-    return false;
+void demosaic_bayer(ImageArray& img) {
+    // The legacy Pascal code pulled pattern + method from stackmenu1 combos.
+    // Phase 5b defaults to the RGGB hint with bilinear interpolation; pattern
+    // parity is resolved from the live globals (BAYERPAT, XBAYROFF, YBAYROFF,
+    // ROWORDER) so the result matches the CLI.
+    const auto pattern = astap::core::get_demosaic_pattern(
+        2, astap::xbayroff, astap::ybayroff, astap::roworder);
+    astap::core::demosaic_bayer(img, head, pattern,
+                                astap::core::DemosaicMethod::Bilinear);
 }
 
-bool save_fits(const ImageArray& /*img*/, void* /*lines*/,
-               const std::string& /*filename*/, int /*bits*/, bool /*overwrite*/) {
-    return false;
+namespace {
+MemoSink g_memo_sink;
+ProgressSink g_progress_sink;
+}  // namespace
+
+void set_memo2_sink(MemoSink sink) {
+    g_memo_sink = std::move(sink);
 }
 
-void demosaic_bayer(ImageArray& /*img*/) {}
-void get_background(int, const ImageArray&, bool, bool, Background& out) {
-    out = Background{};
+void set_progress_sink(ProgressSink sink) {
+    g_progress_sink = std::move(sink);
 }
 
-double Smedian(std::vector<double>& /*data*/, int /*n*/) { return 0.0; }
-double smedian(const std::array<double, 4>& /*values*/, int /*n*/) { return 0.0; }
-void   local_sd(int, int, int, int, int, const ImageArray&,
-                double& n, double& m, int& it) { n = 0; m = 0; it = 0; }
-double mode(const ImageArray&, bool, int, int, int, int, int,
-            double, int& gl) { gl = 0; return 0.0; }
-            
-bool update_solution_and_save(ImageArray& /*img*/, Header& /*h*/, void* /*lines*/) {
-    return false;
+void memo2_message(const std::string& msg) {
+    if (g_memo_sink) {
+        g_memo_sink(msg);
+    }
 }
 
-void pixel_to_celestial(const Header&, double, double, int, double& ra, double& dec) {
-    ra = 0;
-    dec = 0;
+void progress_indicator(double value, const std::string& label) {
+    if (g_progress_sink) {
+        g_progress_sink(value, label);
+    }
 }
-void celestial_to_pixel(const Header&, double, double, double& x, double& y) {
-    x = 0;
-    y = 0;
-}
-void date_to_jd(const std::string&, const std::string&, double) {}
-
-double strtofloat1(const std::string& /*s*/) { return 0.0; }
-double strtofloat2(const std::string& /*s*/) { return 0.0; }
-int    strtoint2(const std::string& /*s*/, int d) { return d; }
-
-void memo2_message(const std::string& /*msg*/) {}
-void progress_indicator(double /*v*/, const std::string& /*l*/) {}
 
 std::string listview_subitem(int /*index*/, int /*col*/) { return {}; }
 void        listview_set_subitem(int, int, const std::string&) {}

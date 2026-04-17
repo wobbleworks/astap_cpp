@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "../core/fits.h"
 #include "../core/globals.h"
 #include "../core/photometry.h"
 
@@ -133,11 +134,14 @@ int         last_light_jd    = 0;
 int         process_as_osc   = 0;
 
 void load_master_dark([[maybe_unused]] int jd, [[maybe_unused]] Header& hd) {
-    // TODO: port from astap_main.pas load_master_dark()
+    // Hot-reload is not implemented; the GUI pre-loads via set_master_dark
+    // and apply_dark_and_flat reads the resident img_dark / head_dark state.
+    // TODO: port the JD / temperature-matched master selection from
+    // astap_main.pas once the calibration library layout is ported.
 }
 
 void load_master_flat([[maybe_unused]] int jd, [[maybe_unused]] Header& hd) {
-    // TODO: port from astap_main.pas load_master_flat()
+    // See load_master_dark comment — same deal for flats.
 }
 
 void memo2_message([[maybe_unused]] std::string_view msg) {
@@ -658,6 +662,69 @@ void black_spot_filter(ImageArray& img) {
         }
     }
     return result;
+}
+
+///----------------------------------------
+/// MARK: Master calibration setters
+///----------------------------------------
+
+namespace {
+
+bool load_master_frame(const std::filesystem::path& path,
+                       ImageArray& img_out,
+                       Header& head_out,
+                       int& count_field) {
+    img_out.clear();
+    head_out = Header{};
+    count_field = 0;
+    if (path.empty()) {
+        return true;
+    }
+    auto memo = std::vector<std::string>{};
+    if (!astap::core::load_fits(path, /*light=*/false, /*load_data=*/true,
+                                /*update_memo=*/true, /*get_ext=*/0,
+                                memo, head_out, img_out)) {
+        img_out.clear();
+        head_out = Header{};
+        return false;
+    }
+    // The CALSTAT / NLIGHT counts from the master's header already live in
+    // head_out; if missing, treat this as a single-frame master so the
+    // apply_dark_and_flat predicate (count > 0) still fires.
+    if (count_field == 0) {
+        count_field = 1;
+    }
+    return true;
+}
+
+}  // namespace
+
+namespace {
+
+void fill_info(const Header& h, MasterFrameInfo& out) {
+    out.width    = h.width;
+    out.height   = h.height;
+    out.naxis3   = h.naxis3;
+    out.exposure = h.exposure;
+    out.calstat  = h.calstat;
+}
+
+}  // namespace
+
+bool set_master_dark(const std::filesystem::path& path, MasterFrameInfo& info) {
+    if (!load_master_frame(path, img_dark, head_dark, head_dark.dark_count)) {
+        return false;
+    }
+    fill_info(head_dark, info);
+    return true;
+}
+
+bool set_master_flat(const std::filesystem::path& path, MasterFrameInfo& info) {
+    if (!load_master_frame(path, img_flat, head_flat, head_flat.flat_count)) {
+        return false;
+    }
+    fill_info(head_flat, info);
+    return true;
 }
 
 ///----------------------------------------

@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -39,6 +40,42 @@ using astap::FileToDo;
 
 /// Background/noise measurement record.
 using astap::Background;
+
+///----------------------------------------
+/// MARK: Master calibration frame loaders
+///----------------------------------------
+
+/// Result of a successful set_master_* call.
+struct MasterFrameInfo {
+    int width{};
+    int height{};
+    int naxis3{};
+    double exposure{};
+    std::string calstat;
+};
+
+///----------------------------------------
+///  @brief Load a master dark from disk into the engine's file-local state.
+/// @details Subsequent stacking passes call @ref apply_dark_and_flat which
+///          reads this master; pass an empty path to clear the state.
+///  @param path FITS path, or empty to clear.
+/// @param[out] info On success, populated with the master's dimensions /
+///                  exposure. Untouched on failure.
+/// @return @c true on success (including the empty-path clear path).
+///----------------------------------------
+
+[[nodiscard]] bool set_master_dark(const std::filesystem::path& path,
+                                   MasterFrameInfo& info);
+
+///----------------------------------------
+///  @brief Load a master flat from disk into the engine's file-local state.
+///  @param path FITS path, or empty to clear.
+/// @param[out] info On success, populated with the master's dimensions.
+/// @return @c true on success (including the empty-path clear path).
+///----------------------------------------
+
+[[nodiscard]] bool set_master_flat(const std::filesystem::path& path,
+                                   MasterFrameInfo& info);
 
 ///----------------------------------------
 /// MARK: Non-GUI algorithmic exports

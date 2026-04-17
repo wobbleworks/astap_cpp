@@ -128,6 +128,14 @@ bool   force_oversize        = false;
 bool   add_sip               = false;
 bool   check_pattern_filter  = false;
 
+/// MARK: Stacking settings
+
+bool   use_manual_align         = false;
+bool   use_ephemeris_alignment  = false;
+bool   use_astrometry_internal  = false;
+double hfd_min_setting          = 0.0;    // 0 = auto (engine defaults to 0.8)
+double sigma_clip_factor        = 2.0;
+
 /// MARK: Memos
 
 std::vector<std::string> memo1_lines;

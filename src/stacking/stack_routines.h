@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cmath>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -42,6 +43,31 @@ using astap::SolutionVector;
 // @ref calc_newx_newy below can reach them without qualification.
 using astap::solving::solution_vectorX;
 using astap::solving::solution_vectorY;
+
+///----------------------------------------
+/// MARK: UI callback sinks
+///----------------------------------------
+
+/// Message line emitted to the solver/stacker log.
+using MemoSink = std::function<void(const std::string&)>;
+
+/// Progress update: value in [0,100], label is a short status tag.
+using ProgressSink = std::function<void(double, const std::string&)>;
+
+///----------------------------------------
+/// @brief Install a sink for solver/stacker log messages.
+/// @details Pass a null function to uninstall. Thread-safe only if the sink
+///          itself is — sinks are called from whatever thread the stacker
+///          runs on.
+///----------------------------------------
+
+void set_memo2_sink(MemoSink sink);
+
+///----------------------------------------
+/// @brief Install a sink for progress updates.
+///----------------------------------------
+
+void set_progress_sink(ProgressSink sink);
 
 ///----------------------------------------
 /// MARK: Public API
