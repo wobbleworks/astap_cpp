@@ -25,6 +25,14 @@
 #include <system_error>
 #include <thread>
 
+#include "stack.h"
+#include "stack_routines.h"
+#include "../core/demosaic.h"
+#include "../core/fits.h"
+#include "../core/globals.h"
+#include "../solving/astrometric_solving.h"
+#include "../solving/star_align.h"
+
 namespace fs = std::filesystem;
 
 ///----------------------------------------
@@ -92,26 +100,16 @@ constexpr std::array<std::string_view, 21> kSupportedExts = {
 } // namespace
 
 ///----------------------------------------
-/// MARK: External dependencies (TODO)
+/// MARK: Engine imports
 ///----------------------------------------
-// These live in astap_main / unit_stack / unit_star_align /
-// unit_astrometric_solving in the original source and have not been ported
-// yet. TODO markers below record the integration points so this file is
-// self-contained syntactically.
-//
-// TODO(astap_main): port `head` (FITS header struct), `img_loaded`,
-// `bayerpat`, `process_as_osc`, `sum_exp`, `sum_temp`, `jd_*`,
-// `light_exposure`, `light_temperature`, `flat_filter`, `counterL`,
-// `solution_vectorX/Y`, `nr_references*`, `quad_star_distances*`,
-// `filename2`, etc.
-//
-// TODO(unit_stack): apply_dark_and_flat, analyse_listview,
-// reset_solution_vectors, use_histogram, plot_fits, demosaic_bayer,
-// test_bayer_matrix, report_binning, bin_and_find_stars, find_quads,
-// find_offset_and_rotation, date_to_jd, JdToDate, memo2_message.
-//
-// TODO(ui): mainwindow.Memo1 / Image1, stackmenu1 controls
-// (live_stacking1, live_stacking_pause1, write_jpeg1, etc.).
+
+using astap::solving::bin_and_find_stars;
+using astap::solving::find_quads;
+using astap::solving::find_offset_and_rotation;
+using astap::solving::reset_solution_vectors;
+using astap::solving::report_binning;
+using astap::solving::quad_star_distances1;
+using astap::solving::quad_star_distances2;
 
 ///----------------------------------------
 /// MARK: LiveStackSession
@@ -191,181 +189,193 @@ void LiveStackSession::update_header() {
     // JD-AVG, DATE-AVG, LIGH_CNT, DARK_CNT, FLAT_CNT, BIAS_CNT.
 }
 
+void LiveStackSession::emit_frame_added() {
+    if (frame_hook_) {
+        frame_hook_(counter_, bad_counter_, total_counter_);
+    }
+}
+
+void LiveStackSession::emit_message(const std::string& msg) {
+    if (message_hook_) {
+        message_hook_(msg);
+    }
+}
+
+bool LiveStackSession::process_frame(const fs::path& filename) {
+    if (!astap::core::load_fits(filename, /*light=*/true, /*load_data=*/true,
+                                /*update_memo=*/true, /*get_ext=*/0,
+                                astap::memo1_lines, astap::head,
+                                astap::img_loaded)) {
+        emit_message("Error loading " + filename.string());
+        return false;
+    }
+
+    // Detect mount slew via change in (ra0, dec0).
+    const auto distance = ang_sep(astap::head.ra0, astap::head.dec0,
+                                  old_ra0_, old_dec0_);
+    old_ra0_  = astap::head.ra0;
+    old_dec0_ = astap::head.dec0;
+    if (distance > (0.2 * kPi / 180.0) && total_counter_ != 0) {
+        emit_message("Mount slew detected — restarting stack.");
+        reset_var();
+    }
+
+    // Exposure change resets the accumulator (mixing different exposures
+    // would need weighted averaging; simpler to start fresh).
+    if (total_counter_ != 0 && old_exposure_ != 0.0 &&
+        std::abs(astap::head.exposure - old_exposure_) > 0.01) {
+        emit_message("Exposure changed — restarting stack.");
+        reset_var();
+    }
+    old_exposure_ = astap::head.exposure;
+
+    (void)apply_dark_and_flat(astap::img_loaded, astap::head);
+
+    // OSC demosaic for mono-with-bayer frames.
+    if (astap::head.naxis3 == 1 && !astap::bayerpat.empty()) {
+        const auto pattern = astap::core::get_demosaic_pattern(
+            2, astap::xbayroff, astap::ybayroff, astap::roworder);
+        astap::core::demosaic_bayer(astap::img_loaded, astap::head, pattern,
+                                    astap::core::DemosaicMethod::Bilinear);
+    }
+
+    if (!init_) {
+        astap::head_ref = astap::head;
+        width_max_  = astap::head.width;
+        height_max_ = astap::head.height;
+        old_width_  = astap::head.width;
+        old_height_ = astap::head.height;
+        binning_    = report_binning(astap::head.height);
+        img_average_.assign(astap::head.naxis3,
+            std::vector<std::vector<float>>(astap::head.height,
+                std::vector<float>(astap::head.width, 0.0f)));
+    } else if (astap::head.width != old_width_ ||
+               astap::head.height != old_height_) {
+        emit_message("Size mismatch vs reference — skipping " +
+                     filename.filename().string());
+        ++bad_counter_;
+        emit_frame_added();
+        return false;
+    }
+
+    // Star detection.
+    auto starlist = StarList{};
+    auto warning = std::string{};
+    bin_and_find_stars(astap::img_loaded, binning_, /*cropping=*/1.0,
+                       /*hfd_min=*/std::max(0.8, astap::hfd_min_setting),
+                       astap::max_stars_setting,
+                       /*get_hist=*/true, starlist, warning);
+
+    // Alignment.
+    if (!init_) {
+        find_quads(starlist, quad_star_distances1);
+        reset_solution_vectors(1.0);
+    } else {
+        find_quads(starlist, quad_star_distances2);
+        if (!find_offset_and_rotation(3, astap::quad_tolerance)) {
+            emit_message("Not enough quad matches — skipping " +
+                         filename.filename().string());
+            ++bad_counter_;
+            emit_frame_added();
+            return false;
+        }
+    }
+    init_ = true;
+
+    ++counter_;
+    ++total_counter_;
+
+    // Running-average accumulation. calc_newx_newy maps (fitsX+1, fitsY+1)
+    // through solution_vectorX/Y (vector-based branch) to reference pixel
+    // space, leaving results in x_new_float / y_new_float (0-based).
+    for (auto fitsY = 0; fitsY < astap::head.height; ++fitsY) {
+        for (auto fitsX = 0; fitsX < astap::head.width; ++fitsX) {
+            calc_newx_newy(/*vector_based=*/true,
+                           static_cast<double>(fitsX + 1),
+                           static_cast<double>(fitsY + 1));
+            const auto xn = static_cast<int>(std::round(astap::x_new_float));
+            const auto yn = static_cast<int>(std::round(astap::y_new_float));
+            if (xn < 0 || xn >= width_max_ ||
+                yn < 0 || yn >= height_max_) {
+                continue;
+            }
+            for (auto col = 0; col < astap::head.naxis3; ++col) {
+                auto& acc = img_average_[col][yn][xn];
+                acc = (acc * (counter_ - 1) +
+                       astap::img_loaded[col][fitsY][fitsX]) / counter_;
+            }
+        }
+    }
+
+    // Publish the running average to the viewer globals so the GUI can
+    // refresh its canvas.
+    astap::img_loaded = img_average_;
+    astap::head = astap::head_ref;
+    astap::head.light_count = counter_;
+
+    emit_message("Added " + filename.filename().string() +
+                 " — total " + std::to_string(counter_) + ".");
+    emit_frame_added();
+    return true;
+}
+
 void LiveStackSession::run() {
-    // Enter the live-stacking state shared with the rest of the port
     astap::live_stacking.store(true);
     reset_var();
     astap::pause_pressed.store(false);
     astap::esc_pressed.store(false);
     total_counter_ = 0;
     spinner_       = 0;
-    
+
+    emit_message("Live stack started. Watching " + watch_dir_.string());
+
     auto waiting = false;
-    
-    // TODO: prepare darks/flats — analyse_listview(...).
-    // TODO: read colour_correction, hfd_min, max_stars from UI settings.
-    
     while (!astap::esc_pressed.load()) {
         auto filename = fs::path{};
-        const auto have_file =
-            !astap::pause_pressed.load() && file_available(watch_dir_, filename);
-            
-        if (have_file) {
-            waiting = false;
-            auto transition_image = false;
-            
-            // TODO: load_image(filename, img_loaded, head, ...).
-            // If load fails or esc was pressed, bail out.
-            const auto loaded = false;  // placeholder
-            if (astap::esc_pressed.load() || !loaded) {
-                // TODO: memo2_message("Error loading file"); reset UI flags.
-                astap::live_stacking.store(false);
-                return;
-            }
-            
-            // Detect mount slew via change in (ra0, dec0).
-            // TODO: pull head.ra0/head.dec0 from real header.
-            const auto ra0  = 0.0;
-            const auto dec0 = 0.0;
-            const auto distance = ang_sep(ra0, dec0, old_ra0_, old_dec0_);
-            old_ra0_  = ra0;
-            old_dec0_ = dec0;
-            if (distance > (0.2 * kPi / 180.0)) {
-                reset_var();
-                if (total_counter_ != 0) {
-                    transition_image = true;
-                    // TODO: memo2_message("New telescope position ...").
-                }
-            } else {
-                // TODO: detect head.exposure change vs old_exposure_; if
-                // different, reset_var() and message.
-            }
-            // TODO: old_exposure_ = head.exposure;
-            
-            if (!transition_image) {
-                if (!init_) {
-                    // TODO: decide process_as_osc from head.naxis3, Xbinning,
-                    // bayerpat and make_osc_color setting.
-                    // TODO: memo1_text_ = mainwindow.Memo1.Text;
-                }
-                
-                // TODO: apply_dark_and_flat(img_loaded, head);
-                // TODO: memo2_message("Adding file: ...");
-                if (astap::esc_pressed.load()) {
-                    return;
-                }
-                
-                if (!init_) {
-                    // TODO: old_width_  = head.width;
-                    //       old_height_ = head.height;
-                } else {
-                    // TODO: warn on size mismatch.
-                }
-                
-                // TODO: if process_as_osc > 0, demosaic_bayer(img_loaded).
-                
-                if (!init_) {
-                    // TODO: binning_ = report_binning(head.height);
-                    // TODO: bin_and_find_stars(...);
-                    // TODO: find_quads(starlist1, quad_star_distances1);
-                    // TODO: setlength(img_average_, head.naxis3, H, W) and
-                    //       zero-fill.
-                }
-                
-                auto solution = true;
-                if (init_) {
-                    // TODO: bin_and_find_stars on second image, find_quads,
-                    //       find_offset_and_rotation. On failure:
-                    //         memo2_message("Not enough quad matches ...");
-                    //         solution = false;
-                } else {
-                    // TODO: reset_solution_vectors(1);
-                }
-                init_ = true;
-                
-                if (solution) {
-                    ++counter_;
-                    ++total_counter_;
-                    // TODO: sum_exp += head.exposure; sum_temp += ...;
-                    // TODO: date_to_jd(...); update jd_start_first, jd_sum.
-                    
-                    // Affine alignment coefficients.
-                    // TODO: pull from solution_vectorX/Y.
-                    [[maybe_unused]] const auto aa = 1.0;
-                    [[maybe_unused]] const auto bb = 0.0;
-                    [[maybe_unused]] const auto cc = 0.0;
-                    [[maybe_unused]] const auto dd = 0.0;
-                    [[maybe_unused]] const auto ee = 1.0;
-                    [[maybe_unused]] const auto ff = 0.0;
-                    
-                    // TODO: running-average accumulation into img_average_,
-                    // either plain or with colour correction. Pseudocode:
-                    //   for (y) for (x) {
-                    //     int xn = round(aa*x + bb*y + cc);
-                    //     int yn = round(dd*x + ee*y + ff);
-                    //     if in-bounds:
-                    //       for (col) img_average_[col][yn][xn] =
-                    //         (img_average_[col][yn][xn] * (counter_-1)
-                    //          + img_loaded[col][y][x]) / counter_;
-                    //   }
-                    
-                    // TODO: head.cd1_1 = 0; head.height = height_max_;
-                    //       head.width = width_max_;
-                    //       img_loaded = img_average_;  // share buffer
-                    // TODO: if (counter_ == 1) use_histogram(img_loaded, true);
-                    // TODO: plot_fits(mainwindow.image1, false, false);
-                    
-                    // Snapshot exports.
-                    // TODO: gate on write_jpeg setting.
-                    [[maybe_unused]] const auto saved =
-                        save_as_jpg(watch_dir_ / "stack.jpeg", img_average_);
-                    // TODO: clipboard copy if interim_to_clipboard enabled.
-                    // TODO: write log.txt if write_log enabled.
-                } else {
-                    ++bad_counter_;
-                }
-                // TODO: update files_live_stacked caption.
-            }
-            
-            // Mark file as processed by renaming it. Appends "_@<date><ext>_"
-            // or just "<ext>_" if already marked.
-            const auto ext = filename.extension().string();
-            const auto stem_path = filename.string().substr(
-                0, filename.string().size() - ext.size());
-            auto renamed = fs::path{};
-            if (filename.string().find("_@") == std::string::npos) {
-                renamed = stem_path + "_@" + current_date_string() + ext + "_";
-            } else {
-                renamed = stem_path + ext + "_";
-            }
-            std::error_code ec;
-            fs::rename(filename, renamed, ec);
-            if (ec) {
-                std::fputc('\a', stderr);  // audible beep on failure
-            }
-        } else {
-            // No new file (or paused). Show a simple status once, then sleep
-            // and animate a tiny spinner.
+        const auto have_file = !astap::pause_pressed.load() &&
+                               file_available(watch_dir_, filename);
+
+        if (!have_file) {
             if (!waiting) {
-                if (astap::pause_pressed.load() && counter_ > 0) {
-                    // TODO: counterL = counter_; update_header();
-                    // TODO: memo2_message("Live stack is suspended.");
-                } else {
-                    // TODO: memo2_message("Live stack is waiting for files.");
-                }
+                emit_message(astap::pause_pressed.load()
+                    ? "Paused."
+                    : "Waiting for files…");
+                waiting = true;
             }
-            waiting = true;
-            
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            
-            // TODO: animate live-stacking caption ("  >", "> ", " > ").
             spinner_ = (spinner_ + 1) % 3;
+            continue;
+        }
+        waiting = false;
+
+        (void)process_frame(filename);
+        if (astap::esc_pressed.load()) {
+            break;
+        }
+
+        // Mark file as processed by renaming it. Appends "_@<date><ext>_"
+        // or just "<ext>_" if already marked.
+        const auto ext = filename.extension().string();
+        const auto stem_path = filename.string().substr(
+            0, filename.string().size() - ext.size());
+        auto renamed = fs::path{};
+        if (filename.string().find("_@") == std::string::npos) {
+            renamed = stem_path + "_@" + current_date_string() + ext + "_";
+        } else {
+            renamed = stem_path + ext + "_";
+        }
+        std::error_code ec;
+        fs::rename(filename, renamed, ec);
+        if (ec) {
+            emit_message("Warning: could not rename " +
+                         filename.filename().string());
         }
     }
-    
+
     astap::live_stacking.store(false);
-    // TODO: memo2_message("Live stack stopped. Save result if required");
-    // TODO: counterL = counter_; if (counter_ > 0) update_header();
+    emit_message("Live stack stopped. Accepted " +
+                 std::to_string(counter_) + ", rejected " +
+                 std::to_string(bad_counter_) + ".");
     memo1_text_.clear();
 }
 

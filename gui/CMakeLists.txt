@@ -72,6 +72,8 @@ set(GUI_SOURCES
 	src/star_detector.h
 	src/image_inspector_dialog.cpp
 	src/image_inspector_dialog.h
+	src/live_stack_window.cpp
+	src/live_stack_window.h
 	src/annotation_scanner.cpp
 	src/annotation_scanner.h
 	src/stack_window.cpp

@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -57,20 +58,45 @@ void stack_live(const std::filesystem::path& watch_dir);
 
 class LiveStackSession final {
 public:
+    /// @brief Notified after each frame is processed (accepted or rejected).
+    /// @param accepted Frames successfully aligned + accumulated.
+    /// @param rejected Frames dropped (alignment failure, load failure, etc.).
+    /// @param total Counter that resets on slew/exposure change.
+    using FrameAddedHook = std::function<void(int accepted, int rejected, int total)>;
+
+    /// @brief Notified with a human-readable status line.
+    using MessageHook = std::function<void(const std::string&)>;
+
     ///----------------------------------------
     ///  @brief Construct a session that watches @p watch_dir.
     ///  @param watch_dir Directory to poll for incoming image files.
     ///----------------------------------------
-    
+
     explicit LiveStackSession(std::filesystem::path watch_dir);
-    
+
+    /// @brief Install a hook called after every frame attempt.
+    void set_frame_added_hook(FrameAddedHook hook) { frame_hook_ = std::move(hook); }
+
+    /// @brief Install a hook called with log messages.
+    void set_message_hook(MessageHook hook) { message_hook_ = std::move(hook); }
+
     ///----------------------------------------
     ///  @brief Main polling / stacking loop. Returns when @c astap::esc_pressed is set.
     ///----------------------------------------
-    
+
     void run();
-    
+
 private:
+    /// @brief Load + calibrate + align + accumulate a single frame.
+    /// @return @c true if the frame was accepted into the stack.
+    [[nodiscard]] bool process_frame(const std::filesystem::path& filename);
+
+    /// @brief Forward to frame_hook_ if installed.
+    void emit_frame_added();
+
+    /// @brief Forward to message_hook_ if installed.
+    void emit_message(const std::string& msg);
+
     /// @brief Reset per-stack accumulators.
     void reset_var() noexcept;
     
@@ -125,8 +151,11 @@ private:
     int  old_width_     = 0;
     int  old_height_    = 0;
     int  binning_       = 1;
-    
+
     ImageArray img_average_;
+
+    FrameAddedHook frame_hook_;
+    MessageHook    message_hook_;
 };
     
 } // namespace

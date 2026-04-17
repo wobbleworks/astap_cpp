@@ -82,6 +82,7 @@ private:
 	class LogWindow* _logWindow = nullptr;
 	class StackWindow* _stackWindow = nullptr;
 	class ImageInspectorDialog* _inspectorDialog = nullptr;
+	class LiveStackWindow* _liveStackWindow = nullptr;
 	class QMenu* _recentMenu = nullptr;
 
 	// Permanent status-bar widgets (cursor pixel, cursor celestial, image dims).

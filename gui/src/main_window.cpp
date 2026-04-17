@@ -11,6 +11,7 @@
 #include "controls_panel.h"
 #include "image_viewer.h"
 #include "image_inspector_dialog.h"
+#include "live_stack_window.h"
 #include "log_window.h"
 #include "solve_dialog.h"
 #include "stack_window.h"
@@ -131,6 +132,21 @@ MainWindow::MainWindow(QWidget* parent) :
 		_stackWindow->show();
 		_stackWindow->raise();
 		_stackWindow->activateWindow();
+	});
+	connect(_ui->actionLiveStack, &QAction::triggered, this, [this]() {
+		if (!_liveStackWindow) {
+			_liveStackWindow = new LiveStackWindow(this);
+			_liveStackWindow->setViewer(_ui->imageViewer);
+			connect(_liveStackWindow, &LiveStackWindow::stackUpdated,
+				this, [this](int n) {
+					setWindowTitle(tr("Live — %1 frames — ASTAP").arg(n));
+					statusBar()->showMessage(
+						tr("Live stack: %1 frames").arg(n));
+				});
+		}
+		_liveStackWindow->show();
+		_liveStackWindow->raise();
+		_liveStackWindow->activateWindow();
 	});
 	connect(_ui->actionClearMarkers, &QAction::triggered, this, [this]() {
 		_ui->imageViewer->clearStarMarkers();
