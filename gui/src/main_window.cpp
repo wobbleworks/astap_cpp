@@ -10,6 +10,7 @@
 #include "annotation_scanner.h"
 #include "controls_panel.h"
 #include "image_viewer.h"
+#include "image_inspector_dialog.h"
 #include "log_window.h"
 #include "solve_dialog.h"
 #include "stack_window.h"
@@ -108,6 +109,7 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionSolve, &QAction::triggered, this, &MainWindow::solveImage);
 	connect(_ui->actionShowSolverLog, &QAction::triggered, this, &MainWindow::showSolverLog);
 	connect(_ui->actionAnalyse, &QAction::triggered, this, &MainWindow::analyseStars);
+	connect(_ui->actionInspect, &QAction::triggered, this, &MainWindow::inspectImage);
 	connect(_ui->actionAnnotate, &QAction::triggered, this, &MainWindow::annotateDeepSky);
 	connect(_ui->actionStack, &QAction::triggered, this, [this]() {
 		if (!_stackWindow) {
@@ -598,6 +600,21 @@ void MainWindow::saveFileAs() {
 		QMessageBox::warning(this, tr("Save As"),
 			tr("Failed to save %1.").arg(path));
 	}
+}
+
+void MainWindow::inspectImage() {
+	if (!_ui->imageViewer->hasImage()) {
+		QMessageBox::information(this, tr("Inspect Image"),
+			tr("Open an image first."));
+		return;
+	}
+	if (!_inspectorDialog) {
+		_inspectorDialog = new ImageInspectorDialog(this);
+	}
+	_inspectorDialog->show();
+	_inspectorDialog->raise();
+	_inspectorDialog->activateWindow();
+	_inspectorDialog->analyseCurrentImage();
 }
 
 void MainWindow::annotateDeepSky() {

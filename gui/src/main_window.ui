@@ -96,6 +96,7 @@
      <string>&amp;Image</string>
     </property>
     <addaction name="actionAnalyse"/>
+    <addaction name="actionInspect"/>
     <addaction name="actionAnnotate"/>
     <addaction name="actionClearMarkers"/>
     <addaction name="separator"/>
@@ -234,6 +235,14 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+A</string>
+   </property>
+  </action>
+  <action name="actionInspect">
+   <property name="text">
+    <string>&amp;Inspect Image…</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+I</string>
    </property>
   </action>
   <action name="actionClearMarkers">

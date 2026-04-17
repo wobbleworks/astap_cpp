@@ -59,6 +59,7 @@ private slots:
 	void annotateDeepSky();
 	void saveFile();
 	void saveFileAs();
+	void inspectImage();
 
 protected:
 	void closeEvent(QCloseEvent* event) override;
@@ -80,6 +81,7 @@ private:
 	std::unique_ptr<Ui::MainWindow> _ui;
 	class LogWindow* _logWindow = nullptr;
 	class StackWindow* _stackWindow = nullptr;
+	class ImageInspectorDialog* _inspectorDialog = nullptr;
 	class QMenu* _recentMenu = nullptr;
 
 	// Permanent status-bar widgets (cursor pixel, cursor celestial, image dims).
