@@ -84,18 +84,33 @@ private slots:
 	void startStacking();
 	void togglePause();
 	void stopStacking();
+	void browseMasterDark();
+	void browseMasterFlat();
+	void clearMasterDark();
+	void clearMasterFlat();
 	void onWorkerMessage(QString text);
 	void onWorkerFrame(int accepted, int rejected, int total);
 	void onWorkerFinished();
 
 private:
 	void setRunningUi(bool running);
+	void hydrateCalibrationFromSettings();
 
 	QLineEdit* _folderEdit = nullptr;
 	QPushButton* _browseButton = nullptr;
 	QPushButton* _startButton = nullptr;
 	QPushButton* _pauseButton = nullptr;
 	QPushButton* _stopButton = nullptr;
+
+	QLineEdit* _darkPath = nullptr;
+	QLabel* _darkStatus = nullptr;
+	QPushButton* _darkBrowse = nullptr;
+	QPushButton* _darkClear = nullptr;
+	QLineEdit* _flatPath = nullptr;
+	QLabel* _flatStatus = nullptr;
+	QPushButton* _flatBrowse = nullptr;
+	QPushButton* _flatClear = nullptr;
+
 	QLabel* _countersLabel = nullptr;
 	QPlainTextEdit* _log = nullptr;
 

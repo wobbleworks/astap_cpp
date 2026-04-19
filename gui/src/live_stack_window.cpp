@@ -11,10 +11,12 @@
 
 #include "../../src/core/globals.h"
 #include "../../src/stacking/live_stacking.h"
+#include "../../src/stacking/stack.h"
 
 #include <QCloseEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -88,6 +90,34 @@ LiveStackWindow::LiveStackWindow(QWidget* parent) :
 	folderRow->addWidget(_browseButton);
 	root->addLayout(folderRow);
 
+	// Calibration group — Dark + Flat pickers. Writes the same engine
+	// globals as the batch Stack window's Calibration tab, so state is
+	// shared between the two windows.
+	auto makeCalRow = [&](const QString& title,
+	                     QLineEdit*& pathEdit, QLabel*& statusLabel,
+	                     QPushButton*& browseBtn, QPushButton*& clearBtn) {
+		auto* group = new QGroupBox(title, this);
+		auto* groupLayout = new QVBoxLayout(group);
+		auto* row = new QHBoxLayout();
+		pathEdit = new QLineEdit(group);
+		pathEdit->setReadOnly(true);
+		pathEdit->setPlaceholderText(tr("No file loaded"));
+		browseBtn = new QPushButton(tr("Browse…"), group);
+		clearBtn = new QPushButton(tr("Clear"), group);
+		row->addWidget(pathEdit, 1);
+		row->addWidget(browseBtn);
+		row->addWidget(clearBtn);
+		groupLayout->addLayout(row);
+		statusLabel = new QLabel(tr("—"), group);
+		statusLabel->setStyleSheet("color: gray;");
+		groupLayout->addWidget(statusLabel);
+		root->addWidget(group);
+	};
+	makeCalRow(tr("Master Dark"), _darkPath, _darkStatus,
+	           _darkBrowse, _darkClear);
+	makeCalRow(tr("Master Flat"), _flatPath, _flatStatus,
+	           _flatBrowse, _flatClear);
+
 	// Control row
 	auto* controlRow = new QHBoxLayout();
 	_startButton = new QPushButton(tr("Start"), this);
@@ -121,6 +151,45 @@ LiveStackWindow::LiveStackWindow(QWidget* parent) :
 	        this, &LiveStackWindow::togglePause);
 	connect(_stopButton, &QPushButton::clicked,
 	        this, &LiveStackWindow::stopStacking);
+	connect(_darkBrowse, &QPushButton::clicked,
+	        this, &LiveStackWindow::browseMasterDark);
+	connect(_darkClear, &QPushButton::clicked,
+	        this, &LiveStackWindow::clearMasterDark);
+	connect(_flatBrowse, &QPushButton::clicked,
+	        this, &LiveStackWindow::browseMasterFlat);
+	connect(_flatClear, &QPushButton::clicked,
+	        this, &LiveStackWindow::clearMasterFlat);
+
+	hydrateCalibrationFromSettings();
+}
+
+void LiveStackWindow::hydrateCalibrationFromSettings() {
+	QSettings settings;
+	const auto darkPath = settings.value("calibration/masterDark").toString();
+	if (!darkPath.isEmpty() && QFileInfo::exists(darkPath)) {
+		astap::stacking::MasterFrameInfo info;
+		if (astap::stacking::set_master_dark(
+		        std::filesystem::path(darkPath.toStdString()), info)) {
+			_darkPath->setText(darkPath);
+			_darkStatus->setText(tr("Loaded: %1 × %2, exp %3s")
+				.arg(info.width).arg(info.height)
+				.arg(info.exposure, 0, 'f', 1));
+		} else {
+			settings.remove("calibration/masterDark");
+		}
+	}
+	const auto flatPath = settings.value("calibration/masterFlat").toString();
+	if (!flatPath.isEmpty() && QFileInfo::exists(flatPath)) {
+		astap::stacking::MasterFrameInfo info;
+		if (astap::stacking::set_master_flat(
+		        std::filesystem::path(flatPath.toStdString()), info)) {
+			_flatPath->setText(flatPath);
+			_flatStatus->setText(tr("Loaded: %1 × %2")
+				.arg(info.width).arg(info.height));
+		} else {
+			settings.remove("calibration/masterFlat");
+		}
+	}
 }
 
 LiveStackWindow::~LiveStackWindow() {
@@ -142,6 +211,71 @@ void LiveStackWindow::closeEvent(QCloseEvent* event) {
 		stopStacking();
 	}
 	event->accept();
+}
+
+void LiveStackWindow::browseMasterDark() {
+	QSettings settings;
+	const auto lastDir = settings.value("files/lastCalDir").toString();
+	const auto path = QFileDialog::getOpenFileName(
+		this, tr("Select master dark"), lastDir,
+		tr("FITS images (*.fit *.fits *.fts);;All files (*)"));
+	if (path.isEmpty()) {
+		return;
+	}
+	settings.setValue("files/lastCalDir", QFileInfo(path).absolutePath());
+
+	astap::stacking::MasterFrameInfo info;
+	if (!astap::stacking::set_master_dark(
+	        std::filesystem::path(path.toStdString()), info)) {
+		QMessageBox::warning(this, tr("Master Dark"),
+			tr("Failed to load: %1").arg(path));
+		return;
+	}
+	_darkPath->setText(path);
+	_darkStatus->setText(tr("Loaded: %1 × %2, exp %3s")
+		.arg(info.width).arg(info.height)
+		.arg(info.exposure, 0, 'f', 1));
+	settings.setValue("calibration/masterDark", path);
+}
+
+void LiveStackWindow::browseMasterFlat() {
+	QSettings settings;
+	const auto lastDir = settings.value("files/lastCalDir").toString();
+	const auto path = QFileDialog::getOpenFileName(
+		this, tr("Select master flat"), lastDir,
+		tr("FITS images (*.fit *.fits *.fts);;All files (*)"));
+	if (path.isEmpty()) {
+		return;
+	}
+	settings.setValue("files/lastCalDir", QFileInfo(path).absolutePath());
+
+	astap::stacking::MasterFrameInfo info;
+	if (!astap::stacking::set_master_flat(
+	        std::filesystem::path(path.toStdString()), info)) {
+		QMessageBox::warning(this, tr("Master Flat"),
+			tr("Failed to load: %1").arg(path));
+		return;
+	}
+	_flatPath->setText(path);
+	_flatStatus->setText(tr("Loaded: %1 × %2")
+		.arg(info.width).arg(info.height));
+	settings.setValue("calibration/masterFlat", path);
+}
+
+void LiveStackWindow::clearMasterDark() {
+	astap::stacking::MasterFrameInfo info;
+	(void)astap::stacking::set_master_dark({}, info);
+	_darkPath->clear();
+	_darkStatus->setText(tr("—"));
+	QSettings().remove("calibration/masterDark");
+}
+
+void LiveStackWindow::clearMasterFlat() {
+	astap::stacking::MasterFrameInfo info;
+	(void)astap::stacking::set_master_flat({}, info);
+	_flatPath->clear();
+	_flatStatus->setText(tr("—"));
+	QSettings().remove("calibration/masterFlat");
 }
 
 void LiveStackWindow::browseFolder() {
@@ -237,6 +371,10 @@ void LiveStackWindow::setRunningUi(bool running) {
 	_stopButton->setEnabled(running);
 	_browseButton->setEnabled(!running);
 	_folderEdit->setEnabled(!running);
+	_darkBrowse->setEnabled(!running);
+	_darkClear->setEnabled(!running);
+	_flatBrowse->setEnabled(!running);
+	_flatClear->setEnabled(!running);
 	if (!running) {
 		_pauseButton->setText(tr("Pause"));
 	}

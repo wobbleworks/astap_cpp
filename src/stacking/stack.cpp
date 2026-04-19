@@ -1081,15 +1081,60 @@ void date_to_jd(std::string_view date_obs, std::string_view date_avg, double exp
 /// MARK: resize_img_loaded
 ///----------------------------------------
 
-void resize_img_loaded([[maybe_unused]] double ratio) {
-    // TODO: port once astap_main globals (head, img_loaded) are
-    // represented in C++. The algorithmic body:
-    //   - compute w2 = round(ratio * w), h2 = round(ratio * h)
-    //   - allocate img_temp2[naxis3][h2][w2]
-    //   - for each (fitsY, fitsX): bicubic_interpolate at (x/ratio, y/ratio)
-    //   - copy result back into img_loaded, update head.Width/Height,
-    //     cdelt1/2, crpix1/2, cd1_1..cd2_2, binning, pixel sizes.
-    memo2_message("resize_img_loaded: TODO, not yet ported (needs astap_main globals).");
+void resize_img_loaded(double ratio) {
+    if (ratio <= 0.0 || std::abs(ratio - 1.0) < 1e-6 || img_loaded.empty()) {
+        return;
+    }
+    const auto w1 = head.width;
+    const auto h1 = head.height;
+    const auto w2 = std::max(1, static_cast<int>(std::round(ratio * w1)));
+    const auto h2 = std::max(1, static_cast<int>(std::round(ratio * h1)));
+
+    // Bilinear resample into a fresh buffer, then swap in.
+    auto out = ImageArray{};
+    out.assign(head.naxis3,
+        std::vector<std::vector<float>>(h2, std::vector<float>(w2, 0.0f)));
+
+    for (auto c = 0; c < head.naxis3; ++c) {
+        for (auto y2 = 0; y2 < h2; ++y2) {
+            const auto sy = static_cast<double>(y2) / ratio;
+            const auto y0 = std::clamp(static_cast<int>(std::floor(sy)),
+                                       0, h1 - 1);
+            const auto y1 = std::min(y0 + 1, h1 - 1);
+            const auto fy = sy - y0;
+            for (auto x2 = 0; x2 < w2; ++x2) {
+                const auto sx = static_cast<double>(x2) / ratio;
+                const auto x0 = std::clamp(static_cast<int>(std::floor(sx)),
+                                           0, w1 - 1);
+                const auto x1 = std::min(x0 + 1, w1 - 1);
+                const auto fx = sx - x0;
+                const auto v00 = img_loaded[c][y0][x0];
+                const auto v10 = img_loaded[c][y0][x1];
+                const auto v01 = img_loaded[c][y1][x0];
+                const auto v11 = img_loaded[c][y1][x1];
+                out[c][y2][x2] = static_cast<float>(
+                    (1.0 - fx) * (1.0 - fy) * v00 +
+                    fx * (1.0 - fy) * v10 +
+                    (1.0 - fx) * fy * v01 +
+                    fx * fy * v11);
+            }
+        }
+    }
+    img_loaded = std::move(out);
+
+    // Update WCS so the scaled frame still points at the right sky.
+    // Pixel count scales by ratio; scale per pixel scales by 1/ratio;
+    // reference pixel index scales by ratio.
+    head.width  = w2;
+    head.height = h2;
+    head.cdelt1 /= ratio;
+    head.cdelt2 /= ratio;
+    head.crpix1 *= ratio;
+    head.crpix2 *= ratio;
+    head.cd1_1  /= ratio;
+    head.cd1_2  /= ratio;
+    head.cd2_1  /= ratio;
+    head.cd2_2  /= ratio;
 }
 
 ///----------------------------------------

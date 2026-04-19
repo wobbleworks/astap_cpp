@@ -9,6 +9,7 @@
 #include "stack_window.h"
 #include "image_viewer.h"
 
+#include "../../src/core/fits.h"
 #include "../../src/core/globals.h"
 #include "../../src/core/image_io.h"
 #include "../../src/stacking/stack.h"
@@ -16,25 +17,32 @@
 
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QRegularExpression>
+#include <QSet>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 ///----------------------------------------
@@ -50,6 +58,60 @@ enum AlignmentIndex {
 	kAlignManual = 2,
 	kAlignNone = 3
 };
+
+// Channel role for LRGB stacking. "Light" is untagged / treated as a mono
+// frame by Average and Sigma-clip methods.
+enum Channel {
+	kChanLight = 0,
+	kChanL = 1,
+	kChanR = 2,
+	kChanG = 3,
+	kChanB = 4,
+	kChanRGB = 5,
+};
+
+QStringList channelLabels() {
+	return {
+		QObject::tr("Light"),
+		QStringLiteral("L"),
+		QStringLiteral("R"),
+		QStringLiteral("G"),
+		QStringLiteral("B"),
+		QStringLiteral("RGB"),
+	};
+}
+
+// Read FITS header only (skip pixel data) to get width × height. Returns
+// area = w * h, or 0 on failure.
+long long probe_area(const QString& path) {
+	astap::Header h;
+	astap::ImageArray img;
+	auto memo = std::vector<std::string>{};
+	if (!astap::core::load_fits(std::filesystem::path(path.toStdString()),
+	                            /*light=*/true, /*load_data=*/false,
+	                            /*update_memo=*/false, /*get_ext=*/0,
+	                            memo, h, img)) {
+		return 0;
+	}
+	return static_cast<long long>(h.width) * h.height;
+}
+
+// Guess a channel from a filename. Matches "_L_", "_R_", "_G_", "_B_",
+// "_RGB_", "_Lum_", etc. Falls back to Light.
+Channel guess_channel(const QString& path) {
+	const auto name = QFileInfo(path).completeBaseName().toLower();
+	// Check RGB first so "_rgb_" doesn't match as just R.
+	const auto tokens = name.split(QRegularExpression("[^a-z0-9]+"),
+	                               Qt::SkipEmptyParts);
+	for (const auto& t : tokens) {
+		if (t == "rgb") return kChanRGB;
+		if (t == "l" || t == "lum" || t == "luminance") return kChanL;
+		if (t == "r" || t == "red")   return kChanR;
+		if (t == "g" || t == "green") return kChanG;
+		if (t == "b" || t == "blue")  return kChanB;
+	}
+	return kChanLight;
+}
 
 }  // namespace
 
@@ -82,16 +144,54 @@ StackWindow::StackWindow(QWidget* parent) :
 	root->addLayout(stackRow);
 
 	connect(_stackButton, &QPushButton::clicked, this, &StackWindow::startStack);
+
+	hydrateCalibrationFromSettings();
+}
+
+void StackWindow::hydrateCalibrationFromSettings() {
+	QSettings settings;
+	const auto darkPath = settings.value("calibration/masterDark").toString();
+	if (!darkPath.isEmpty() && QFileInfo::exists(darkPath)) {
+		astap::stacking::MasterFrameInfo info;
+		if (astap::stacking::set_master_dark(
+		        std::filesystem::path(darkPath.toStdString()), info)) {
+			_darkPath->setText(darkPath);
+			_darkStatus->setText(tr("Loaded: %1 × %2, exp %3s")
+				.arg(info.width).arg(info.height)
+				.arg(info.exposure, 0, 'f', 1));
+		} else {
+			settings.remove("calibration/masterDark");
+		}
+	}
+	const auto flatPath = settings.value("calibration/masterFlat").toString();
+	if (!flatPath.isEmpty() && QFileInfo::exists(flatPath)) {
+		astap::stacking::MasterFrameInfo info;
+		if (astap::stacking::set_master_flat(
+		        std::filesystem::path(flatPath.toStdString()), info)) {
+			_flatPath->setText(flatPath);
+			_flatStatus->setText(tr("Loaded: %1 × %2")
+				.arg(info.width).arg(info.height));
+		} else {
+			settings.remove("calibration/masterFlat");
+		}
+	}
 }
 
 void StackWindow::buildLightsTab() {
 	auto* page = new QWidget(_tabs);
 	auto* layout = new QVBoxLayout(page);
 
-	_fileList = new QListWidget(page);
-	_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-	_fileList->setDragDropMode(QAbstractItemView::NoDragDrop);
-	layout->addWidget(_fileList, 1);
+	_fileTable = new QTableWidget(0, 2, page);
+	_fileTable->setHorizontalHeaderLabels({tr("File"), tr("Channel")});
+	_fileTable->horizontalHeader()->setSectionResizeMode(
+		0, QHeaderView::Stretch);
+	_fileTable->horizontalHeader()->setSectionResizeMode(
+		1, QHeaderView::ResizeToContents);
+	_fileTable->verticalHeader()->setVisible(false);
+	_fileTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+	_fileTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+	_fileTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	layout->addWidget(_fileTable, 1);
 
 	auto* buttonRow = new QHBoxLayout();
 	_addButton = new QPushButton(tr("Add…"), page);
@@ -199,6 +299,7 @@ void StackWindow::applySettingsToEngine() {
 	astap::use_manual_align        = (align == kAlignManual);
 	astap::use_ephemeris_alignment = false;  // no ephemeris UI yet
 	astap::use_astrometry_internal = (align == kAlignAstrometric);
+	astap::skip_alignment          = (align == kAlignNone);
 
 	astap::sigma_clip_factor = _sigmaFactor->value();
 	astap::max_stars_setting = _maxStars->value();
@@ -223,23 +324,45 @@ void StackWindow::addFiles() {
 	settings.setValue("files/lastStackDir",
 		QFileInfo(paths.first()).absolutePath());
 
+	// Find already-present paths to skip duplicates.
+	auto existing = QSet<QString>{};
+	for (int r = 0; r < _fileTable->rowCount(); ++r) {
+		existing.insert(_fileTable->item(r, 0)->text());
+	}
+
+	const auto labels = channelLabels();
 	for (const auto& p : paths) {
-		const auto items = _fileList->findItems(p, Qt::MatchExactly);
-		if (items.isEmpty()) {
-			_fileList->addItem(p);
+		if (existing.contains(p)) {
+			continue;
 		}
+		const auto row = _fileTable->rowCount();
+		_fileTable->insertRow(row);
+		auto* pathItem = new QTableWidgetItem(p);
+		pathItem->setToolTip(p);
+		_fileTable->setItem(row, 0, pathItem);
+
+		auto* combo = new QComboBox(_fileTable);
+		combo->addItems(labels);
+		combo->setCurrentIndex(guess_channel(p));
+		_fileTable->setCellWidget(row, 1, combo);
 	}
 }
 
 void StackWindow::removeSelected() {
-	const auto selected = _fileList->selectedItems();
-	for (auto* item : selected) {
-		delete _fileList->takeItem(_fileList->row(item));
+	auto rows = QList<int>{};
+	for (const auto* item : _fileTable->selectedItems()) {
+		if (item->column() == 0) {
+			rows.append(item->row());
+		}
+	}
+	std::sort(rows.begin(), rows.end(), std::greater<int>());
+	for (const auto r : rows) {
+		_fileTable->removeRow(r);
 	}
 }
 
 void StackWindow::clearList() {
-	_fileList->clear();
+	_fileTable->setRowCount(0);
 }
 
 void StackWindow::browseMasterDark() {
@@ -264,6 +387,7 @@ void StackWindow::browseMasterDark() {
 	_darkStatus->setText(tr("Loaded: %1 × %2, exp %3s")
 		.arg(info.width).arg(info.height)
 		.arg(info.exposure, 0, 'f', 1));
+	settings.setValue("calibration/masterDark", path);
 }
 
 void StackWindow::browseMasterFlat() {
@@ -287,6 +411,7 @@ void StackWindow::browseMasterFlat() {
 	_flatPath->setText(path);
 	_flatStatus->setText(tr("Loaded: %1 × %2")
 		.arg(info.width).arg(info.height));
+	settings.setValue("calibration/masterFlat", path);
 }
 
 void StackWindow::clearMasterDark() {
@@ -294,6 +419,7 @@ void StackWindow::clearMasterDark() {
 	(void)astap::stacking::set_master_dark({}, info);
 	_darkPath->clear();
 	_darkStatus->setText(tr("—"));
+	QSettings().remove("calibration/masterDark");
 }
 
 void StackWindow::clearMasterFlat() {
@@ -301,13 +427,14 @@ void StackWindow::clearMasterFlat() {
 	(void)astap::stacking::set_master_flat({}, info);
 	_flatPath->clear();
 	_flatStatus->setText(tr("—"));
+	QSettings().remove("calibration/masterFlat");
 }
 
 void StackWindow::startStack() {
-	const auto count = _fileList->count();
-	if (count < 2) {
+	const auto count = _fileTable->rowCount();
+	if (count < 1) {
 		QMessageBox::information(this, tr("Stack"),
-			tr("Add at least 2 light frames to stack."));
+			tr("Add at least one frame to stack."));
 		return;
 	}
 
@@ -316,10 +443,18 @@ void StackWindow::startStack() {
 	_stackButton->setEnabled(false);
 	_progress->setValue(0);
 
-	auto files = std::vector<astap::FileToDo>{};
-	files.reserve(count);
+	// Gather (path, channel) rows from the table. Pre-probe FITS headers
+	// for pixel dimensions so we can pick the largest frame as the stacking
+	// reference — the engine upsamples smaller frames to match it.
+	struct Row { QString path; int channel; long long area; };
+	auto rows = std::vector<Row>{};
+	rows.reserve(count);
 	for (int i = 0; i < count; ++i) {
-		files.push_back({_fileList->item(i)->text().toStdString(), i});
+		const auto path = _fileTable->item(i, 0)->text();
+		auto* combo = qobject_cast<QComboBox*>(
+			_fileTable->cellWidget(i, 1));
+		const auto chan = combo ? combo->currentIndex() : kChanLight;
+		rows.push_back({path, chan, probe_area(path)});
 	}
 
 	astap::stacking::set_progress_sink(
@@ -327,26 +462,87 @@ void StackWindow::startStack() {
 			_progress->setValue(static_cast<int>(std::round(value)));
 			QCoreApplication::processEvents();
 		});
-	astap::stacking::set_memo2_sink([](const std::string& /*msg*/) {
-		// TODO: route to a Stack log pane; swallow for now.
+	astap::stacking::set_memo2_sink([](const std::string& msg) {
+		qDebug().noquote() << "[stack]" << QString::fromStdString(msg);
 	});
 
 	auto counter = 0;
 	const auto method = _methodCombo->currentData().toInt();
-	const auto span = std::span<astap::FileToDo>(files);
 	const auto osc = 0;  // TODO: OSC/Bayer toggle
 
-	switch (method) {
-	case kMethodSigmaClip:
-		astap::stacking::stack_sigmaclip(osc, span, counter);
-		break;
-	case kMethodLRGB:
-		astap::stacking::stack_LRGB(span, counter);
-		break;
-	case kMethodAverage:
-	default:
-		astap::stacking::stack_average(osc, span, counter);
-		break;
+	if (method == kMethodLRGB) {
+		// Assemble the 6-slot LRGB span: ref, R, G, B, RGB, L.
+		// R, G, B are required. L and RGB are optional (engine skips empty
+		// slots).
+		auto firstOf = [&](Channel c) -> QString {
+			for (const auto& r : rows) {
+				if (r.channel == c) return r.path;
+			}
+			return {};
+		};
+		const auto lPath = firstOf(kChanL);
+		const auto rPath = firstOf(kChanR);
+		const auto gPath = firstOf(kChanG);
+		const auto bPath = firstOf(kChanB);
+		const auto rgbPath = firstOf(kChanRGB);
+
+		auto missing = QStringList{};
+		if (rPath.isEmpty()) missing << "R";
+		if (gPath.isEmpty()) missing << "G";
+		if (bPath.isEmpty()) missing << "B";
+		if (!missing.isEmpty()) {
+			QMessageBox::warning(this, tr("LRGB"),
+				tr("LRGB combine needs at least one file tagged for each of "
+				   "R, G, B. Missing: %1.").arg(missing.join(", ")));
+			astap::stacking::set_progress_sink(nullptr);
+			astap::stacking::set_memo2_sink(nullptr);
+			_stackButton->setEnabled(true);
+			return;
+		}
+
+		// Engine expects [ref, R, G, B, RGB, L]. Pick the ref as the
+		// largest-dim tagged file so the engine upsamples smaller channels
+		// to match. Falls back to L when present at equal size.
+		auto areaOf = [&](const QString& p) -> long long {
+			for (const auto& r : rows) {
+				if (r.path == p) return r.area;
+			}
+			return 0;
+		};
+		auto refPath = !lPath.isEmpty() ? lPath : rPath;
+		auto refArea = areaOf(refPath);
+		for (const auto* p : {&rPath, &gPath, &bPath, &lPath}) {
+			if (!p->isEmpty() && areaOf(*p) > refArea) {
+				refPath = *p;
+				refArea = areaOf(*p);
+			}
+		}
+		auto files = std::vector<astap::FileToDo>{};
+		files.push_back({refPath.toStdString(), 0});
+		files.push_back({rPath.toStdString(), 0});
+		files.push_back({gPath.toStdString(), 0});
+		files.push_back({bPath.toStdString(), 0});
+		files.push_back({rgbPath.toStdString(), 0});  // may be empty — engine skips
+		files.push_back({lPath.toStdString(), 0});    // may be empty — engine skips
+
+		astap::stacking::stack_LRGB(std::span<astap::FileToDo>(files), counter);
+	} else {
+		// Average / Sigma-clip: feed everything untagged by channel. Put
+		// the largest-dim frame first so it becomes the engine's reference.
+		auto ordered = rows;
+		std::stable_sort(ordered.begin(), ordered.end(),
+			[](const Row& a, const Row& b) { return a.area > b.area; });
+		auto files = std::vector<astap::FileToDo>{};
+		files.reserve(ordered.size());
+		for (int i = 0; i < static_cast<int>(ordered.size()); ++i) {
+			files.push_back({ordered[i].path.toStdString(), i});
+		}
+		const auto span = std::span<astap::FileToDo>(files);
+		if (method == kMethodSigmaClip) {
+			astap::stacking::stack_sigmaclip(osc, span, counter);
+		} else {
+			astap::stacking::stack_average(osc, span, counter);
+		}
 	}
 
 	astap::stacking::set_progress_sink(nullptr);

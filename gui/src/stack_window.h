@@ -20,11 +20,11 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
-class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
 class QTabWidget;
+class QTableWidget;
 
 ///----------------------------------------
 namespace astap::gui {
@@ -67,11 +67,12 @@ private:
 	void buildCalibrationTab();
 	void buildSettingsTab();
 	void applySettingsToEngine();
+	void hydrateCalibrationFromSettings();
 
 	QTabWidget* _tabs = nullptr;
 
 	// Lights tab
-	QListWidget* _fileList = nullptr;
+	QTableWidget* _fileTable = nullptr;
 	QPushButton* _addButton = nullptr;
 	QPushButton* _removeButton = nullptr;
 	QPushButton* _clearButton = nullptr;

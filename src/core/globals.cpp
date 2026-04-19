@@ -133,6 +133,7 @@ bool   check_pattern_filter  = false;
 bool   use_manual_align         = false;
 bool   use_ephemeris_alignment  = false;
 bool   use_astrometry_internal  = false;
+bool   skip_alignment           = false;
 double hfd_min_setting          = 0.0;    // 0 = auto (engine defaults to 0.8)
 double sigma_clip_factor        = 2.0;
 

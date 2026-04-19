@@ -419,31 +419,24 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
     use_manual_align        = astap::use_manual_align;
     use_ephemeris_alignment = astap::use_ephemeris_alignment;
     use_astrometry_internal = astap::use_astrometry_internal;
-    hfd_min = std::max(0.8, strtofloat2(/*stackmenu1.min_star_size_stacking1.caption*/ ""));
-    max_stars = strtoint2(/*stackmenu1.max_stars1.text*/ "", 500);
-    use_sip   = /*stackmenu1.add_sip1.checked*/ false;
-    
+    hfd_min = std::max(0.8, astap::hfd_min_setting);
+    max_stars = astap::max_stars_setting;
+    use_sip   = astap::add_sip;
+
     counter = 0;
     jd_sum = 0.0;
     jd_start_first = 1e99;
     jd_end_last = 0.0;
     init = false;
-    
-    // Combining colours.
+
+    // Combining colours. Identity mix + zero offsets; UI for colour calibration
+    // isn't ported yet.
     memo2_message("Combining colours.");
-    rr_factor = strtofloat2(/*rr1.text*/ "");
-    rg_factor = strtofloat2(/*rg1.text*/ "");
-    rb_factor = strtofloat2(/*rb1.text*/ "");
-    gr_factor = strtofloat2(/*gr1.text*/ "");
-    gg_factor = strtofloat2(/*gg1.text*/ "");
-    gb_factor = strtofloat2(/*gb1.text*/ "");
-    br_factor = strtofloat2(/*br1.text*/ "");
-    bg_factor = strtofloat2(/*bg1.text*/ "");
-    bb_factor = strtofloat2(/*bb1.text*/ "");
-    
-    red_add   = strtofloat2(/*red_filter_add1.text*/ "");
-    green_add = strtofloat2(/*green_filter_add1.text*/ "");
-    blue_add  = strtofloat2(/*blue_filter_add1.text*/ "");
+    rr_factor = 1.0; rg_factor = 0.0; rb_factor = 0.0;
+    gr_factor = 0.0; gg_factor = 1.0; gb_factor = 0.0;
+    br_factor = 0.0; bg_factor = 0.0; bb_factor = 1.0;
+
+    red_add = 0.0; green_add = 0.0; blue_add = 0.0;
     
     for (c = 0; c < static_cast<int>(files_to_process.size()); ++c) {
         // Should contain reference, R, G, B, RGB, L.
@@ -490,12 +483,19 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                 memo2_message("Error loading " + filename2);
                 return;
             }
-            
+
             if (!init) {
                 head_ref = head;
                 initialise_calc_sincos_dec0();
+            } else if (head.width < head_ref.width || head.height < head_ref.height) {
+                const auto ratio = std::max(
+                    static_cast<double>(head_ref.width)  / head.width,
+                    static_cast<double>(head_ref.height) / head.height);
+                memo2_message("Upsampling lower-resolution frame by "
+                    + std::to_string(ratio) + "x to match reference.");
+                resize_img_loaded(ratio);
             }
-            
+
             if (!use_sip) {
                 a_order = 0;
             }
@@ -580,7 +580,9 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
             } else {
                 if (init) {
                     // Second image.
-                    if (use_manual_align || use_ephemeris_alignment) {
+                    if (astap::skip_alignment) {
+                        reset_solution_vectors(1);
+                    } else if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
@@ -840,7 +842,14 @@ void stack_average(int process_as_osc,
                     }
                 }
             } else {
-                if (old_width != head.width || old_height != head.height) {
+                if (head.width < old_width || head.height < old_height) {
+                    const auto ratio = std::max(
+                        static_cast<double>(old_width)  / head.width,
+                        static_cast<double>(old_height) / head.height);
+                    memo2_message("Upsampling lower-resolution frame by "
+                        + std::to_string(ratio) + "x to match reference.");
+                    resize_img_loaded(ratio);
+                } else if (old_width != head.width || old_height != head.height) {
                     memo2_message("Warning different size image!");
                 }
                 if (head.naxis3 > old_naxis3) {
@@ -848,7 +857,7 @@ void stack_average(int process_as_osc,
                     return;
                 }
             }
-            
+
             if (!use_sip) {
                 a_order = 0;
             }
@@ -903,7 +912,9 @@ void stack_average(int process_as_osc,
                 sincos(head.dec0, SIN_dec0, COS_dec0);
             } else {
                 if (init) {
-                    if (use_manual_align || use_ephemeris_alignment) {
+                    if (astap::skip_alignment) {
+                        reset_solution_vectors(1);
+                    } else if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
@@ -2316,7 +2327,14 @@ void calibration_and_alignment(int process_as_osc,
                     }
                 }
             } else {
-                if (old_width != head.width || old_height != head.height) {
+                if (head.width < old_width || head.height < old_height) {
+                    const auto ratio = std::max(
+                        static_cast<double>(old_width)  / head.width,
+                        static_cast<double>(old_height) / head.height);
+                    memo2_message("Upsampling lower-resolution frame by "
+                        + std::to_string(ratio) + "x to match reference.");
+                    resize_img_loaded(ratio);
+                } else if (old_width != head.width || old_height != head.height) {
                     memo2_message("Warning different size image!");
                 }
                 if (head.naxis3 > old_naxis3) {
@@ -2324,7 +2342,7 @@ void calibration_and_alignment(int process_as_osc,
                     return;
                 }
             }
-            
+
             if (!use_sip) {
                 a_order = 0;
             }
