@@ -103,17 +103,7 @@ int get_demosaic_pattern() { return 0; }
 // Unported Pascal units — supplied as no-op stubs so the linker is happy.
 // -----------------------------------------------------------------------------
 
-// unit_annotation.pas (deep-sky annotations / photometry calibration)
-void plot_and_measure_stars(const ImageArray& /*img*/,
-                            std::vector<std::string>& /*memo*/,
-                            Header& /*head*/,
-                            bool /*flux_calibration*/,
-                            bool /*plot_stars*/,
-                            bool /*report_lim_magn*/) {}
-void plot_and_measure_stars(ImageArray& /*img*/,
-                            std::vector<std::string>& /*memo*/,
-                            Header& /*head*/,
-                            bool, bool, bool) {}
+// plot_and_measure_stars is ported in core/photometry_catalog.cpp.
 
 void dsspos(double, double, double& ra, double& dec)  { ra = 0; dec = 0; }
 void EQU_GAL(double, double, double& l, double& b)    { l  = 0; b   = 0; }

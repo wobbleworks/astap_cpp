@@ -100,6 +100,74 @@ TEST_CASE("mad_median does not modify input") {
 	CHECK(mad == doctest::Approx(4.0 / 3.0));
 }
 
+TEST_CASE("get_best_mean") {
+	SUBCASE("empty input returns zeroed result") {
+		const auto r = get_best_mean({}, 0);
+		CHECK(r.count == 0);
+		CHECK(r.mean == 0.0);
+		CHECK(r.standard_error_mean == 0.0);
+	}
+
+	SUBCASE("single element is returned verbatim with SEM=0") {
+		const std::vector<double> v{7.5};
+		const auto r = get_best_mean(v, 1);
+		CHECK(r.count == 1);
+		CHECK(r.mean == doctest::Approx(7.5));
+		CHECK(r.standard_error_mean == 0.0);
+	}
+
+	SUBCASE("two elements average with SEM=0") {
+		const std::vector<double> v{2.0, 4.0};
+		const auto r = get_best_mean(v, 2);
+		CHECK(r.count == 2);
+		CHECK(r.mean == doctest::Approx(3.0));
+		CHECK(r.standard_error_mean == 0.0);
+	}
+
+	SUBCASE("tight cluster with one extreme outlier rejects the outlier") {
+		// Nine samples at ~10, plus one wild 1000.
+		const std::vector<double> v{10.0, 10.1,  9.9, 10.2,  9.8,
+		                            10.0, 10.1,  9.9, 10.0, 1000.0};
+		const auto r = get_best_mean(v, static_cast<int>(v.size()));
+
+		CHECK(r.count == 9);                           // outlier rejected
+		CHECK(r.mean == doctest::Approx(10.0).epsilon(0.02));
+		CHECK(r.standard_error_mean > 0.0);            // must report non-zero SEM
+		CHECK(r.standard_error_mean < 1.0);            // but bounded
+	}
+
+	SUBCASE("SEM shrinks as sample size grows (same spread)") {
+		// Alternating ±0.5 around 100.0 — use even n so mean is exactly 100.
+		auto sample = [](int n) {
+			std::vector<double> v;
+			v.reserve(n);
+			for (int i = 0; i < n; ++i) {
+				v.push_back(100.0 + ((i & 1) ? 0.5 : -0.5));
+			}
+			return v;
+		};
+		const auto small  = sample(6);
+		const auto large  = sample(46);
+		const auto rs = get_best_mean(small,  6);
+		const auto rl = get_best_mean(large, 46);
+
+		CHECK(rs.mean == doctest::Approx(100.0));
+		CHECK(rl.mean == doctest::Approx(100.0));
+		// SEM must strictly decrease as count grows (same sigma, larger N).
+		CHECK(rl.standard_error_mean < rs.standard_error_mean);
+	}
+
+	SUBCASE("all-identical samples: degenerate MAD=0 case rejects everything") {
+		// With MAD=0, sigma=0, so the strict `abs(x-median) < 1.5*sigma`
+		// test never passes. This matches the Pascal original — callers
+		// should not rely on this edge case returning a useful mean.
+		const std::vector<double> v{5.0, 5.0, 5.0, 5.0, 5.0, 5.0};
+		const auto r = get_best_mean(v, 6);
+		CHECK(r.count == 0);
+		CHECK(r.mean == 0.0);
+	}
+}
+
 TEST_CASE("fnmodulo wraps into [0, range)") {
 	CHECK(fnmodulo(0.0,   360.0) == doctest::Approx(0.0));
 	CHECK(fnmodulo(180.0, 360.0) == doctest::Approx(180.0));

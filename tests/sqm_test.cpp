@@ -49,6 +49,19 @@ namespace astap::core {
 	                    std::vector<std::string>&) {
 		bck = astap::Background{};
 	}
+
+	// Short (5-arg) overload from photometry.cpp — calculate_sqm uses it after
+	// the flux calibration step. photometry.cpp is not linked here.
+	void get_background(int, const astap::ImageArray&, bool, bool,
+	                    astap::Background& bck) {
+		bck = astap::Background{};
+	}
+
+	// plot_and_measure_stars (mutable-image overload) lives in
+	// core/photometry_catalog.cpp, which pulls in the full photometry
+	// pipeline. calculate_sqm only needs a no-op stub here.
+	void plot_and_measure_stars(astap::ImageArray&, std::vector<std::string>&,
+	                             astap::Header&, bool, bool, bool) {}
 }
 
 namespace astap::stacking {

@@ -54,7 +54,33 @@ void quicksort(std::span<double> a, int lo, int hi);
 
 void mad_median(std::span<const double> list, int leng,
                 double& mad, double& median);
-                
+
+///----------------------------------------
+/// @brief Result of @ref get_best_mean after MAD-based outlier rejection.
+///----------------------------------------
+
+struct BestMeanResult {
+	double mean{};                 ///< @brief Mean of the in-range (non-outlier) samples.
+	double standard_error_mean{};  ///< @brief Standard error of that mean.
+	int    count{};                ///< @brief Number of non-outlier samples that contributed.
+};
+
+///----------------------------------------
+/// @brief Mean of @p list with outliers rejected via MAD (≥ 1.5σ from median).
+/// @details Computes the median and MAD of the first @p leng samples, converts
+///          MAD to a standard-deviation estimate (σ ≈ 1.4826 · MAD), then takes
+///          the arithmetic mean of samples within 1.5·σ of the median. The
+///          standard error of the mean is σ / √count. For @p leng == 1 the
+///          single value is returned with count=1 and SEM=0; for @p leng == 2
+///          the straight average is returned with count=2 and SEM=0, matching
+///          the Pascal original's fast paths. Empty input returns count=0.
+/// @param list Source data (not modified).
+/// @param leng Number of elements to consider.
+/// @return Mean, standard-error-of-the-mean, and non-outlier count.
+///----------------------------------------
+
+[[nodiscard]] BestMeanResult get_best_mean(std::span<const double> list, int leng);
+
 ///----------------------------------------
 /// @brief Floating-point modulo helper for wrapping angles into [0, range).
 /// @param x     Value to wrap.

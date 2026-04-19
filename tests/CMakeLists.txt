@@ -119,6 +119,12 @@ astap_add_test(sqm_test
 	"${ASTAP_SRC}/core/ephemerides.cpp"  # precess_iau1976 (via hjd.cpp)
 )
 
+astap_add_test(photometry_calibration_test
+	"${ASTAP_SRC}/core/photometry.cpp"
+	"${ASTAP_SRC}/core/wcs.cpp"
+	"${ASTAP_SRC}/core/util.cpp"          # get_best_mean, smedian, mad_median
+)
+
 astap_add_test(imaging_test
 	"${ASTAP_SRC}/core/imaging.cpp"
 	"${ASTAP_SRC}/core/globals.cpp"

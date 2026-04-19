@@ -146,6 +146,48 @@ void mad_median(std::span<const double> list, int leng,
     mad = smedian(std::span<const double>{work}, leng);
 }
 
+BestMeanResult get_best_mean(std::span<const double> list, int leng) {
+    // Fast paths that skip MAD altogether (matches the Pascal original).
+    if (leng <= 0) {
+        return {};
+    }
+    if (leng == 1) {
+        return {.mean = list[0], .standard_error_mean = 0.0, .count = 1};
+    }
+    if (leng == 2) {
+        return {.mean = (list[0] + list[1]) * 0.5,
+                .standard_error_mean = 0.0,
+                .count = 2};
+    }
+
+    // Compute robust sigma from the median absolute deviation.
+    auto mad    = 0.0;
+    auto median = 0.0;
+    mad_median(list, leng, mad, median);
+    const auto sigma = mad * 1.4826;
+
+    // Sum only samples within 1.5 sigma of the median.
+    auto sum   = 0.0;
+    auto count = 0;
+    for (auto i = 0; i < leng; ++i) {
+        if (std::abs(list[i] - median) < 1.5 * sigma) {
+            sum += list[i];
+            ++count;
+        }
+    }
+
+    if (count <= 0) {
+        return {};
+    }
+
+    // Final mean and SEM. SEM uses sigma (not the in-range stdev) to match the
+    // original — the reasoning is that sigma is a better estimator of the true
+    // population spread than the clipped sample stdev.
+    const auto mean = sum / static_cast<double>(count);
+    const auto sem  = sigma / std::sqrt(static_cast<double>(count));
+    return {.mean = mean, .standard_error_mean = sem, .count = count};
+}
+
 [[nodiscard]] double fnmodulo(double x, double range) noexcept {
     if (x >= 0.0 && x < range) {
         return x;

@@ -16,6 +16,7 @@
 #include <doctest/doctest.h>
 
 #include "solving/star_align.h"
+#include "core/photometry.h"   // HfdResult / HfdScratch types for the stub
 
 #include <cmath>
 #include <string>
@@ -24,6 +25,22 @@
 using namespace astap::solving;
 using astap::StarList;
 using astap::SolutionVector;
+
+///----------------------------------------
+/// MARK: Test-local stub
+///
+/// star_align.cpp links in find_stars() which calls astap::core::HFD. The
+/// full HFD implementation lives in core/photometry.cpp and drags in a lot
+/// of the rest of the library. None of the tests below exercise find_stars,
+/// so a trivial no-op stub is sufficient to satisfy the linker.
+///----------------------------------------
+
+namespace astap::core {
+void HFD(const astap::ImageArray&, int, int, int, double, double, double,
+         HfdResult& r, HfdScratch&) {
+	r = HfdResult{};
+}
+}  // namespace astap::core
 
 ///----------------------------------------
 /// MARK: Helpers

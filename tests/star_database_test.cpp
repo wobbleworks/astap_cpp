@@ -149,3 +149,71 @@ TEST_CASE("find_areas: ra = 0 and ra = 2pi should pick the same primary area") {
 
 	CHECK(a1_l == a1_r);
 }
+
+///----------------------------------------
+/// MARK: get_database_passband — auto / Local mode (filter-driven)
+///----------------------------------------
+
+TEST_CASE("get_database_passband: auto mode infers passband from FITS filter") {
+	SUBCASE("empty filter defaults to BP") {
+		CHECK(get_database_passband("",       "auto") == "BP");
+		CHECK(get_database_passband("",       "Local") == "BP");
+	}
+
+	SUBCASE("CV (clear-view) filter resolves to BP") {
+		CHECK(get_database_passband("CV",     "auto") == "BP");
+		CHECK(get_database_passband("cv",     "auto") == "BP"); // case-insensitive
+	}
+
+	SUBCASE("Sloan filters resolve to SG/SR/SI") {
+		CHECK(get_database_passband("Sloan g", "auto") == "SG");
+		CHECK(get_database_passband("Sloan r", "auto") == "SR");
+		CHECK(get_database_passband("Sloan i", "auto") == "SI");
+		// Plain 'S' with no colour letter falls back to BP.
+		CHECK(get_database_passband("S",       "auto") == "BP");
+	}
+
+	SUBCASE("Johnson/Cousins G and V both map to Johnson-V") {
+		CHECK(get_database_passband("G",       "auto") == "V");
+		CHECK(get_database_passband("V",       "auto") == "V");
+	}
+
+	SUBCASE("Johnson-B and Cousins-R") {
+		CHECK(get_database_passband("B",       "auto") == "B");
+		CHECK(get_database_passband("R",       "auto") == "R");
+	}
+
+	SUBCASE("unknown filter name falls back to BP") {
+		CHECK(get_database_passband("Xyzzy",   "auto") == "BP");
+	}
+}
+
+///----------------------------------------
+/// MARK: get_database_passband — manual mode (database-driven)
+///----------------------------------------
+
+TEST_CASE("get_database_passband: manual mode parses passband from database name") {
+	SUBCASE("BP is checked before B") {
+		// "Gaia BP" contains 'B' but we must pick "BP", not "B".
+		CHECK(get_database_passband("V", "Gaia BP")    == "BP");
+	}
+
+	SUBCASE("V / B / R all recognised") {
+		CHECK(get_database_passband("V", "Johnson V")   == "V");
+		CHECK(get_database_passband("R", "Johnson B")   == "B");
+		CHECK(get_database_passband("G", "Cousins R")   == "R");
+	}
+
+	SUBCASE("Sloan SG/SR/SI: Pascal priority matches B/R first") {
+		// The original Pascal checks plain B and R before SG/SR/SI in manual
+		// mode, so "Sloan SG" returns "B" (via the 'B' in "Sloan"), not "SG".
+		// Preserved here intentionally; a database name like "SG_only" that
+		// lacks B/V/R can still reach the Sloan branches.
+		CHECK(get_database_passband("", "SG_only")      == "SG");
+		CHECK(get_database_passband("", "SI_only")      == "SI");
+	}
+
+	SUBCASE("unrecognised database name returns double-question mark") {
+		CHECK(get_database_passband("V", "unknown_db")  == "??");
+	}
+}

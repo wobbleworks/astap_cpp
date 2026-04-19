@@ -144,6 +144,27 @@ extern std::filesystem::path database_path;
 [[nodiscard]] bool select_star_database(const std::string& database, double fov);
 
 ///----------------------------------------
+///    @brief Resolve the photometric passband from a FITS filter name + user-chosen
+///           reference database.
+/// @details Mirrors the Pascal original in @c unit_annotation.pas. When
+///          @p reference_database contains "auto" or "Local", the passband
+///          is inferred from @p filter_str using ASTAP's filter-name conventions
+///          (empty/CV → BP, Sloan S* filters → SG/SR/SI, Johnson-Cousins
+///          G/V → V, B → B, R → R; otherwise BP). When the user has explicitly
+///          selected a non-auto reference (e.g. "Gaia BP", "Johnson V"), the
+///          passband is parsed directly from @p reference_database using
+///          priority-ordered substring matching: BP, V, B, R, SG, SR, SI.
+///          Returns "??" if nothing matches.
+///    @param filter_str Filter name from the FITS header (e.g. "G", "V", "Sloan g").
+///    @param reference_database User-selected reference database string.
+/// @return Two-character passband identifier ("BP", "V", "B", "R", "SG", "SR",
+///         "SI", or "??").
+///----------------------------------------
+
+[[nodiscard]] std::string get_database_passband(std::string_view filter_str,
+                                                 std::string_view reference_database);
+
+///----------------------------------------
 ///      @brief For a telescope position and FOV, identify up to four area
 ///             indices covering the field of view.
 ///   @details Area indices are 1-based (1..290 or 1..1476 depending on

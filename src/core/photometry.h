@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -115,6 +116,93 @@ void measure_magnitudes(int annulus_rad,
                         double min_star_size_stacking,
                         StarList& stars);
                         
+/// MARK: - Photometric flux calibration
+
+///----------------------------------------
+/// @brief One catalog star yielded by a @ref StarSource.
+/// @details Units match the Pascal convention used by the .1476/.290 readers:
+///          magnitude is stored as @c magn = mag * 10, and Gaia Bp-Rp is
+///          @c Bp_Rp = (Bp - Rp) * 10. Sentinels are 999 (no colour recorded)
+///          and -128 (unreliable Johnson-V, skip).
+///----------------------------------------
+
+struct CatalogStar {
+    double ra{};      ///< @brief Right ascension in radians.
+    double dec{};     ///< @brief Declination in radians.
+    double magn{};    ///< @brief Magnitude * 10.
+    double Bp_Rp{};   ///< @brief Gaia Bp-Rp * 10, or 999 (mono database) / -128 (unreliable).
+};
+
+///----------------------------------------
+/// @brief Catalog-star iterator protocol.
+/// @details Callers pass a source that yields one star per invocation, writing
+///          into @p out and returning @c true. When the catalog is exhausted
+///          the source returns @c false. Three concrete sources exist in the
+///          wider codebase: local .1476/.290 files, the wide-field @c w08
+///          buffer, and the online Gaia query cache.
+///----------------------------------------
+
+using StarSource = std::function<bool(CatalogStar& out)>;
+
+///----------------------------------------
+/// @brief Result of a call to @ref calibrate_flux.
+///----------------------------------------
+
+struct FluxCalibrationResult {
+    bool        success{false};                ///< @brief True if @p head.mzero was set.
+    int         stars_measured{0};             ///< @brief Count of stars that survived all filters.
+    double      standard_error_mean{0.0};      ///< @brief SEM of the log-ratio mean, in magnitudes.
+    std::string message;                       ///< @brief Human-readable summary of the result.
+};
+
+///----------------------------------------
+/// @brief Photometric flux calibration: measure catalog stars and compute MZERO.
+/// @details C++23 port of the flux-calibration half of
+///          @c plot_and_measure_stars in @c unit_annotation.pas, refactored so
+///          the catalog iterator is injectable. For each star yielded by
+///          @p next_star the routine projects the RA/Dec onto the image,
+///          runs @ref HFD at the predicted pixel, rejects saturated and
+///          low-SNR candidates, and accumulates @c flux_ratio =
+///          @c flux / 10^((21 - mag) / 2.5). After the loop, a MAD-based
+///          robust mean of the flux ratios yields
+///          @c head.mzero = 21 + 2.5 log10(mean_flux_ratio). At least three
+///          usable stars are required for success.
+///
+///          When @p report_lim_magn is @c true the routine also writes
+///          @c head.magn_limit from the per-star HFD * SD products.
+///
+///          This routine updates the following @p head fields on success:
+///          @c mzero, @c passband_database, and (if @p report_lim_magn)
+///          @c magn_limit. It does @em not touch @c mzero_radius — the caller
+///          must set that to either the point-source aperture radius or 99
+///          (extended objects) before calling.
+///
+///          No GUI drawing is performed; the annotation-overlay half of the
+///          Pascal original lives in a separate routine (future work).
+///    @param img             Read-only image data (single channel used).
+///    @param[in,out] head    FITS header (updated on success).
+///    @param[in,out] memo    Log sink for progress messages and MZERO card updates.
+///    @param next_star       Injectable catalog iterator.
+///    @param passband_active Passband identifier written to @c head.passband_database.
+///    @param annulus_radius  HFD annulus radius in pixels (typically 14).
+///    @param aperture_setting Aperture diameter setting in HFD multiples; 0 means
+///                           "max" (extended objects), which forces a large
+///                           virtual aperture for the limiting-magnitude calc.
+///    @param report_lim_magn When @c true, compute and store @c head.magn_limit.
+/// @return @ref FluxCalibrationResult carrying success flag, star count, SEM,
+///         and a summary message.
+///----------------------------------------
+
+[[nodiscard]] FluxCalibrationResult calibrate_flux(
+    const ImageArray& img,
+    Header& head,
+    std::vector<std::string>& memo,
+    const StarSource& next_star,
+    std::string_view passband_active,
+    int annulus_radius,
+    double aperture_setting,
+    bool report_lim_magn);
+
 ///----------------------------------------
 /// @brief Run photometric calibration on the image.
 /// @param img                    Read-only image data.

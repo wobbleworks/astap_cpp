@@ -14,8 +14,11 @@
 
 #include "photometry.h"
 
+#include "fits.h"
 #include "globals.h"
 #include "imaging.h"
+#include "util.h"
+#include "wcs.h"
 
 #include <algorithm>
 #include <array>
@@ -573,6 +576,216 @@ void calibrate_photometry(const ImageArray& img,
                                /*plot_stars*/false,
                                /*report_lim_magnitude*/true);
     }
+}
+
+/// MARK: - calibrate_flux
+
+FluxCalibrationResult calibrate_flux(const ImageArray& img,
+                                     Header& head,
+                                     std::vector<std::string>& memo,
+                                     const StarSource& next_star,
+                                     std::string_view passband_active,
+                                     int annulus_radius,
+                                     double aperture_setting,
+                                     bool report_lim_magn) {
+    FluxCalibrationResult result{};
+
+    // Guard — need an actual image with a WCS solution.
+    if (img.empty() || img[0].empty() || img[0][0].empty()) {
+        result.message = "Calibration failure: empty image.";
+        return result;
+    }
+    if ((head.naxis == 0) || (head.cd1_1 == 0)) {
+        result.message = "Calibration failure: no WCS solution.";
+        return result;
+    }
+
+    // Saturation threshold. Matches the Pascal "not saturated" test:
+    // a star is rejected if the central 3x3 neighbourhood contains any pixel
+    // within 1000 ADU of datamax_org.
+    const auto saturation_cutoff = head.datamax_org - 1000.0;
+
+    // Accumulators for the robust mean at the end.
+    auto flux_ratio_array = std::vector<double>{};
+    auto hfd_x_sd_array   = std::vector<double>{};
+    flux_ratio_array.reserve(256);
+    if (report_lim_magn) {
+        hfd_x_sd_array.reserve(256);
+    }
+
+    auto scratch = HfdScratch{};
+    auto star    = CatalogStar{};
+
+    // Iterate the injected catalog source.
+    while (next_star(star)) {
+        // Skip red stars for flux calibration unless the database is mono-only.
+        if (star.Bp_Rp != 999.0 && star.Bp_Rp > 12.0) {
+            continue;
+        }
+        // Skip stars flagged with unreliable Johnson-V (Bp or Rp missing in Gaia).
+        if (star.Bp_Rp == -128.0) {
+            continue;
+        }
+
+        // Project RA/Dec onto the image. celestial_to_pixel returns 1-based
+        // FITS coordinates; convert to 0-based image indices.
+        auto fits_x = 0.0;
+        auto fits_y = 0.0;
+        celestial_to_pixel(head, star.ra, star.dec, fits_x, fits_y);
+        const auto x = fits_x - 1.0;
+        const auto y = fits_y - 1.0;
+
+        // Require the star to be reasonably inside the frame (with some slop).
+        if (x <= -50.0 || x > head.width + 50.0
+                || y <= -50.0 || y > head.height + 50.0) {
+            continue;
+        }
+
+        // Measure the star.
+        auto hr = HfdResult{};
+        HFD(img,
+            static_cast<int>(std::lround(x)),
+            static_cast<int>(std::lround(y)),
+            /*rs=*/annulus_radius,
+            /*aperture_small=*/head.mzero_radius,
+            /*adu_e=*/0.0,
+            /*xbinning=*/1.0,
+            hr, scratch);
+
+        // Quality gate: Pascal uses HFD in [0.8, 15) and SNR > 30.
+        if (hr.hfd >= 15.0 || hr.hfd < 0.8 || hr.snr <= 30.0) {
+            continue;
+        }
+
+        // Saturation check: 3x3 neighbourhood around the centroid must be
+        // strictly below saturation_cutoff.
+        const auto cx = static_cast<int>(std::lround(hr.xc));
+        const auto cy = static_cast<int>(std::lround(hr.yc));
+        if (cx < 1 || cx >= head.width - 1
+                || cy < 1 || cy >= head.height - 1) {
+            // Near-edge centroids can't be checked safely; skip.
+            continue;
+        }
+        auto saturated = false;
+        for (auto dy = -1; dy <= 1 && !saturated; ++dy) {
+            for (auto dx = -1; dx <= 1; ++dx) {
+                if (img[0][cy + dy][cx + dx] >= saturation_cutoff) {
+                    saturated = true;
+                    break;
+                }
+            }
+        }
+        if (saturated) {
+            continue;
+        }
+
+        // Linear flux ratio — should be constant across stars when the WCS,
+        // magnitude scale, and instrument response are self-consistent.
+        const auto flux_ratio =
+            hr.flux / std::pow(10.0, (21.0 - star.magn / 10.0) / 2.5);
+        flux_ratio_array.push_back(flux_ratio);
+
+        // Retain hfd * sd_bg for the optional limiting-magnitude formula.
+        if (report_lim_magn) {
+            hfd_x_sd_array.push_back(hr.hfd * scratch.sd_bg);
+        }
+    }
+
+    result.stars_measured = static_cast<int>(flux_ratio_array.size());
+
+    if (result.stars_measured < 3) {
+        result.message = "Calibration failure! Less than three usable stars found.";
+        memo.push_back(result.message);
+        return result;
+    }
+
+    // Robust mean of the flux ratios rejects outliers via MAD.
+    const auto mean = get_best_mean(flux_ratio_array, result.stars_measured);
+    if (mean.count <= 0) {
+        result.message = "Calibration failure! MAD rejected all samples.";
+        memo.push_back(result.message);
+        return result;
+    }
+
+    // Convert mean flux ratio to MZERO. log10(x) = ln(x)/ln(10).
+    constexpr auto kLn10 = 2.302585092994046;
+    head.mzero = 21.0 + std::log(mean.mean) * 2.5 / kLn10;
+    head.passband_database = std::string{passband_active};
+
+    // SEM in flux-ratio space converts to magnitude space via log of ratio.
+    const auto sem_magn =
+        std::log((mean.mean + mean.standard_error_mean) / mean.mean) * 2.5 / kLn10;
+    result.standard_error_mean = sem_magn;
+
+    // Update MZERO-related header cards.
+    if (aperture_setting == 0.0) {
+        // aperture_setting == 0 indicates "max" in the GUI, i.e. extended-object
+        // calibration — write the real MZERO.
+        update_float(memo, "MZERO   =",
+                     " / Magnitude Zero Point. " + std::string{passband_active}
+                     + "=-2.5*log(flux)+MZERO",
+                     false, head.mzero);
+    } else {
+        update_text(memo, "MZERO   =",
+                    "                   0 / Unknown. Set aperture to MAX for ext. objects  ");
+    }
+    update_float(memo, "MZEROR  =",
+                 " / " + std::string{passband_active}
+                 + "=-2.5*log(flux)+MZEROR using MZEROAPT",
+                 false, head.mzero);
+    update_float(memo, "MZEROAPT=",
+                 " / Aperture radius used for MZEROR in pixels",
+                 false, head.mzero_radius);
+    update_text(memo, "MZEROPAS=",
+                "'" + std::string{passband_active} + "'                   / Passband database used.");
+
+    result.success = true;
+
+    // Optional limiting-magnitude calculation (SNR = 7 aperture reduction).
+    if (report_lim_magn) {
+        // Median of hfd * sd_bg, using the shared Smedian helper.
+        auto hfd_x_sd_copy = hfd_x_sd_array;
+        const auto med_hfd_sd = Smedian(hfd_x_sd_copy,
+                                        static_cast<int>(hfd_x_sd_copy.size()));
+        auto flux_snr_7 = 7.0 * std::sqrt(std::numbers::pi) * med_hfd_sd;
+
+        // aperture_setting == 0 ("max") → use a very large aperture so the
+        // encircled-flux fraction is effectively 1.
+        auto apert = aperture_setting;
+        if (apert == 0.0) {
+            apert = 10.0;
+        }
+        const auto sigma_ratio = apert * 2.3548 / 2.0;
+        flux_snr_7 *= (1.0 - std::exp(-0.5 * sigma_ratio * sigma_ratio));
+
+        head.magn_limit =
+            head.mzero - std::log(flux_snr_7) * 2.5 / kLn10;
+
+        update_float(memo, "LIM_MAGN=",
+                     " / Limiting magnitude (SNR=7, aperture "
+                     + std::to_string(head.mzero_radius) + " px)",
+                     false, head.magn_limit);
+    }
+
+    // Build a human-readable summary.
+    char buf[256];
+    if (head.mzero_radius == 99.0) {
+        std::snprintf(buf, sizeof(buf),
+            "Photometry calibration for EXTENDED OBJECTS successful. %d "
+            "Gaia stars used for flux calibration. Standard error MZERO "
+            "[magn]: %.3f.",
+            result.stars_measured, sem_magn);
+    } else {
+        std::snprintf(buf, sizeof(buf),
+            "Photometry calibration for POINT SOURCES successful. %d "
+            "Gaia stars used for flux calibration. Flux aperture diameter: "
+            "%.2f pixels. Standard error MZERO [magn]: %.3f.",
+            result.stars_measured, head.mzero_radius * 2.0, sem_magn);
+    }
+    result.message = buf;
+    memo.push_back(result.message);
+
+    return result;
 }
 
 /// MARK: - test_star_spectrum

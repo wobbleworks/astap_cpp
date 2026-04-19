@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -396,6 +397,61 @@ int                              cache_size{0};
 std::int8_t                      dec9_storage{0};
 std::array<std::uint8_t, 11>     buf2{};
 }  // namespace detail
+
+/// MARK: Passband resolution
+
+std::string get_database_passband(std::string_view filter_str,
+                                  std::string_view reference_database) {
+    // Contains: substring search, case-sensitive (matches Pascal `pos`).
+    constexpr auto contains = [](std::string_view haystack,
+                                 std::string_view needle) {
+        return haystack.find(needle) != std::string_view::npos;
+    };
+
+    // Auto-detect mode: the user left the reference database set to "auto" or
+    // "Local". Infer passband from the FITS filter name.
+    const auto is_auto = contains(reference_database, "auto")
+                      || contains(reference_database, "Local");
+    if (is_auto) {
+        // Uppercase the filter string so our checks are case-insensitive.
+        auto filter_up = std::string{filter_str};
+        for (auto& c : filter_up) {
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+
+        // Empty or "clear-view" filter → Gaia BP.
+        if (filter_up.empty() || contains(filter_up, "CV")) {
+            return "BP";
+        }
+
+        // Sloan filters: prefix 'S' plus a colour letter.
+        if (contains(filter_up, "S")) {
+            if (contains(filter_up, "G")) { return "SG"; }
+            if (contains(filter_up, "R")) { return "SR"; }
+            if (contains(filter_up, "I")) { return "SI"; }
+            return "BP";
+        }
+
+        // Johnson-Cousins: G is treated as Johnson-V (typical DSLR convention).
+        if (contains(filter_up, "G")) { return "V"; }
+        if (contains(filter_up, "V")) { return "V"; }
+        if (contains(filter_up, "B")) { return "B"; }
+        if (contains(filter_up, "R")) { return "R"; }
+        return "BP";
+    }
+
+    // Manual mode: the user picked a specific reference database name. Parse
+    // the passband out of that name. Order matters: check BP before B so
+    // "Gaia BP" does not fall through to "B".
+    if (contains(reference_database, "BP")) { return "BP"; }
+    if (contains(reference_database, "V"))  { return "V"; }
+    if (contains(reference_database, "B"))  { return "B"; }
+    if (contains(reference_database, "R"))  { return "R"; }
+    if (contains(reference_database, "SG")) { return "SG"; }
+    if (contains(reference_database, "SR")) { return "SR"; }
+    if (contains(reference_database, "SI")) { return "SI"; }
+    return "??";
+}
 
 /// MARK: fill_cache
 
