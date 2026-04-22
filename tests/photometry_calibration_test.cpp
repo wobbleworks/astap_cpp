@@ -20,6 +20,7 @@
 #include "core/wcs.h"
 
 #include <cmath>
+#include <array>
 #include <cstdint>
 #include <numbers>
 #include <string>
@@ -50,8 +51,11 @@ namespace astap::core {
 
 // imaging.cpp-owned histogram state used by get_background. Provide
 // zeroed stubs so photometry.cpp's background-dependent paths can link.
-int histogram[3][65536] = {};
-int his_mean[3]         = {};
+// Types MUST match imaging.h exactly — MSVC bakes the full type into the
+// mangled symbol name, so `int[3][65536]` does not link against the
+// `std::array<std::array<std::uint32_t, 65536>, 3>` reference.
+std::array<std::array<std::uint32_t, 65536>, 3> histogram{};
+std::array<int, 3>                              his_mean{};
 
 // get_hist is part of imaging.cpp; calibrate_flux doesn't use it but
 // photometry.cpp contains other functions that do (find_star_center etc.)

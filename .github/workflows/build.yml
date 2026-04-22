@@ -16,12 +16,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: ASTAP++
 
       - name: Checkout doctest
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: doctest/doctest
           ref: v2.4.12
@@ -83,12 +83,12 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: ASTAP++
 
       - name: Checkout doctest
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: doctest/doctest
           ref: v2.4.12
@@ -104,6 +104,9 @@ jobs:
           cache: true
 
       - name: Set up MSVC developer shell
+        # ilammy/msvc-dev-cmd is still on Node 20 as of April 2026. The
+        # runner logs a deprecation warning until a Node 24 release ships.
+        # Safe to leave pinned on @v1 until then.
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure (library + CLI + GUI)
