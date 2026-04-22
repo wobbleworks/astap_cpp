@@ -98,14 +98,12 @@ using astap::instrum;
 using astap::object_name;
 std::string telescop, origin;
 std::string siteelev;
-// astap::airmass and astap::core::airmass both exist; the canonical one the
-// FITS loader writes to is the top-level astap::airmass. Qualify each use at
-// the callsite rather than `using` to avoid the ambiguity.
-double focus_temp = 999;
+using astap::airmass;
+using astap::focus_temp;
+using astap::pressure;
+using astap::site_lat_radians;
 int focus_pos = 0;
-double pressure = 1010;
 bool annotated = false;
-double site_lat_radians = 999;
 std::string sqm_value;
 double equinox = 2000;
 std::string imagetype;
@@ -233,7 +231,7 @@ void reset_fits_global_variables(bool light, astap::Header& head_out) noexcept {
         focus_temp = 999;
         focus_pos = 0;
         pressure = 1010;
-        ::astap::airmass = 0;
+        airmass = 0;
         annotated = false;
         site_lat_radians = 999;
         
@@ -578,7 +576,7 @@ bool load_fits(const std::filesystem::path& filen,
                                 }
                             }
                         } else if (starts_with(header, i + 1, "IRMAS"))
-                            ::astap::airmass = vd(err);
+                            airmass = vd(err);
                             
                         if (header[i + 1] == '_') {
                             // SIP A_*
@@ -1256,7 +1254,7 @@ void read_keys_memo(bool light, astap::Header& head_out,
         else if (key == "XBAYROFF=") xbayroff = static_cast<int>(std::lround(read_float_card(line)));
         else if (key == "YBAYROFF=") ybayroff = static_cast<int>(std::lround(read_float_card(line)));
         else if (key == "PRESSURE=") pressure = std::lround(read_float_card(line));
-        else if (key == "AIRMASS =") ::astap::airmass = std::lround(read_float_card(line));
+        else if (key == "AIRMASS =") airmass = std::lround(read_float_card(line));
         else if (key == "AOCBAROM=") pressure = std::lround(read_float_card(line));
         else if (key == "FOCUSTEM=" || key == "FOCTEMP =" ||
                  key == "AMB-TEMP=" || key == "AOCAMBT =")

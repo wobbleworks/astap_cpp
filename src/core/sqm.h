@@ -57,8 +57,8 @@ extern double altitudefloat;
 /// @brief Last computed sky-quality value in mag/arcsec^2.
 extern double sqmfloat;
 
-/// @brief Air-mass at image centre, set during SQM computation.
-extern double airmass;
+// `airmass` is declared in globals.h (astap::airmass). SQM code writes to it
+// too; no re-declaration here.
 
 /// MARK: Forward Declarations
 

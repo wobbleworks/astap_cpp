@@ -52,6 +52,11 @@ double dec_radians = 0.0;
 double ra_mount    = 0.0;
 double dec_mount   = 0.0;
 
+double pressure          = 1010.0;   // mbar; default sensible sea-level
+double focus_temp        = 999.0;    // °C sentinel
+double site_lat_radians  = 999.0;    // radian sentinel
+double site_long_radians = 999.0;    // radian sentinel
+
 /// MARK: SIP distortion coefficients
 
 bool sip       = false;

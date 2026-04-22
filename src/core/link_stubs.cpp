@@ -33,13 +33,10 @@ namespace astap::core {
 // -----------------------------------------------------------------------------
 
 // sqm.cpp defines: centalt, sitelat, sitelong, lat_default, long_default.
-// Everything else gets a definition here.
-std::string bayerpat;
+// Canonicals in astap:: (globals.cpp): bayerpat, pressure, focus_temp,
+// site_lat_radians, site_long_radians. Only the truly-orphan symbols remain
+// here as astap::core placeholders.
 std::string centaz;
-double      pressure          = 1013.0;
-double      site_lat_radians  = 999.0;
-double      site_long_radians = 999.0;
-double      focus_temp        = 100.0;
 double      wtime2actual      = 0.0;
 
 std::vector<std::string>  recent_files_local;

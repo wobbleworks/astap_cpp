@@ -28,20 +28,22 @@ namespace astap::core {
 /// MARK: External State
 
 // Cross-module state populated by the settings loader before these functions
-// are called. Declared here to keep the coupling local to this translation unit.
+// are called. Pull the canonical `astap::` globals (globals.cpp) into this
+// TU; local astap::core:: placeholders are only used for the ones without a
+// canonical home.
 
-extern double site_lat_radians;
-extern double site_long_radians;
+using astap::focus_temp;
+using astap::pressure;
+using astap::site_lat_radians;
+using astap::site_long_radians;
+
 extern double wtime2actual;
-
 extern std::string sitelat;
 extern std::string sitelong;
 extern std::string lat_default;
 extern std::string long_default;
 extern std::string centaz;
 extern std::string centalt;
-extern double focus_temp;
-extern double pressure;
 
 // Host-supplied log hook.
 void memo2_message(std::string_view text);

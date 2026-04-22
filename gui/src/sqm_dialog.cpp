@@ -245,7 +245,7 @@ void SqmDialog::displayResult(bool ok) {
 	const auto alt = astap::core::altitudefloat;
 	_altitudeValue->setText(QString::number(alt, 'f', 2) + tr(" °"));
 
-	const auto airmass = astap::core::airmass;
+	const auto airmass = astap::airmass;
 	if (airmass > 0.0 && std::isfinite(airmass)) {
 		_airmassValue->setText(QString::number(airmass, 'f', 2));
 	} else {

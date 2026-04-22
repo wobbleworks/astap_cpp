@@ -464,10 +464,10 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
                 "'Error calculating SQM value! Check in the SQM menu (ctrl+Q) first.'");
         }
 
-        if (astap::core::airmass == 0.0) {
-            astap::core::airmass = astap::core::airmass_calc(astap::core::altitudefloat);
+        if (astap::airmass == 0.0) {
+            astap::airmass = astap::core::airmass_calc(astap::core::altitudefloat);
             astap::core::update_generic(astap::memo1_lines, "AIRMASS ",
-                std::format("{:.4f}", astap::core::airmass),
+                std::format("{:.4f}", astap::airmass),
                 "Relative optical path.                        ");
         }
     }

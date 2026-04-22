@@ -27,7 +27,8 @@ namespace astap::core {
 std::string centalt;
 double      altitudefloat = 0.0;
 double      sqmfloat      = 0.0;
-double      airmass       = 0.0;
+// `airmass` lives in astap:: (globals.h / globals.cpp). The canonical is
+// shared with the FITS header loader. Do not re-define here.
 
 std::string sitelat;
 std::string sitelong;
@@ -58,7 +59,11 @@ double atmospheric_absorption(double airmass);
 
 void memo2_message(const std::string& s);
 
-extern std::string bayerpat;
+// Pull the canonical `bayerpat` from globals.h (astap namespace) into this TU
+// so calculate_sqm sees the value FITS-loader writes to. An earlier
+// file-scope extern pointed at a shadow in link_stubs.cpp that was never
+// populated.
+using astap::bayerpat;
 
 /// MARK: - SQM Computation
 
@@ -124,7 +129,7 @@ bool calculate_sqm(Header& headx, bool get_bk, bool get_his, int& pedestal2) {
         
         if (altitudefloat > 0.0) {
             auto airm = airmass_calc(altitudefloat);
-            airmass = airm;
+            astap::airmass = airm;
             
             // Zenith correction: subtract 0.28 from the empirical absorption at airmass = 1
             auto correction = atmospheric_absorption(airm) - 0.28;

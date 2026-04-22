@@ -44,8 +44,7 @@ extern std::array<float, 32769> stretch_c;
 /// @brief Histogram x-axis range set by @c use_histogram for the viewer widget.
 extern int hist_range;
 
-/// @brief Current white point used by @c stretch_image.
-extern double cwhite;
+// `cwhite` lives in astap:: (globals.h); no re-declaration here.
 
 /// @brief Whether @c stretch_image should apply the stretch_c LUT.
 extern bool stretch_on;

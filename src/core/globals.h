@@ -84,6 +84,16 @@ extern double dec_radians;                 ///< @brief Parsed from Dec text fiel
 extern double ra_mount;                    ///< @brief Last reported by mount.
 extern double dec_mount;                   ///< @brief Last reported by mount.
 
+/// MARK: Site state parsed from FITS headers
+///
+/// These hold header-derived site values. Separate from @ref astap::core::sitelat /
+/// @ref astap::core::pressure_hpa (which are user-entered SQM inputs).
+
+extern double pressure;                    ///< @brief PRESSURE / AOCBAROM keyword in mbar.
+extern double focus_temp;                  ///< @brief FOCUSTEM / FOCUSTMP keyword in °C.
+extern double site_lat_radians;            ///< @brief Site latitude derived from SITELAT.
+extern double site_long_radians;           ///< @brief Site longitude derived from SITELONG.
+
 /// MARK: SIP distortion coefficients
 
 extern bool sip;                           ///< @brief SIP distortion enabled.

@@ -88,7 +88,10 @@ std::uint32_t his_total_red = 0;
 std::array<int, 3> his_mean{};
 std::array<float, 32769> stretch_c{};
 int hist_range = 255;
-double cwhite = 0.0;
+// Canonical `cwhite` lives in `astap::` (globals.cpp). A duplicate definition
+// used to live here as `astap::core::cwhite`, silently shadowing the loader's
+// writes; resolved via `using astap::cwhite;` below.
+using astap::cwhite;
 bool stretch_on = false;
 float saturation_factor = 1.0F;
 
