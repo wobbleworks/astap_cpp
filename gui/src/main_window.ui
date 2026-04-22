@@ -98,6 +98,7 @@
     <addaction name="actionAnalyse"/>
     <addaction name="actionInspect"/>
     <addaction name="actionAnnotate"/>
+    <addaction name="actionCatalogStars"/>
     <addaction name="actionClearMarkers"/>
     <addaction name="separator"/>
     <addaction name="actionSolve"/>
@@ -239,6 +240,14 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+D</string>
+   </property>
+  </action>
+  <action name="actionCatalogStars">
+   <property name="text">
+    <string>Ca&amp;talog Star Overlay</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+D</string>
    </property>
   </action>
   <action name="actionAnalyse">

@@ -10,7 +10,11 @@
 
 #include "../../src/analysis/constellations.h"
 #include "../../src/core/wcs.h"
+#include "../../src/reference/online_gaia.h"
+#include "../../src/reference/star_database.h"
+#include "../../src/reference/stars_wide_field.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -281,6 +285,137 @@ ConstellationOverlay build_constellation_overlay(const astap::Header& head) {
 	}
 
 	return out;
+}
+
+///----------------------------------------
+/// MARK: Star-catalog overlay
+///
+/// Walks the active catalog (local .1476/.290 tiles, wide-field w08, or
+/// online Gaia — whichever `select_star_database` has picked) and projects
+/// each entry into pixel space. Mirrors the iteration logic in
+/// src/core/photometry_catalog.cpp, but emits overlay markers instead of
+/// running HFD at each projected position.
+///----------------------------------------
+
+namespace {
+
+constexpr auto kDeg2Rad  = kPi / 180.0;
+constexpr auto kTile1476 = 5.142857143 * kDeg2Rad;
+constexpr auto kTile290  = 9.53 * kDeg2Rad;
+
+/// @brief Project (ra, dec) + append a marker if it lands in a reasonable
+///        bbox around the frame (with 50-pixel slop).
+void project_and_emit(const astap::Header& head,
+                       double ra, double dec,
+                       double magn_times_10, double bp_rp,
+                       std::vector<CatalogStarMarker>& out) {
+	auto fitsX = 0.0;
+	auto fitsY = 0.0;
+	astap::core::celestial_to_pixel(head, ra, dec, fitsX, fitsY);
+	if (fitsX < -50.0 || fitsX > head.width  + 50.0
+			|| fitsY < -50.0 || fitsY > head.height + 50.0) {
+		return;
+	}
+	out.push_back({
+		.x    = fitsX,
+		.y    = fitsY,
+		.magn = magn_times_10 * 0.1,   // catalog stores mag*10
+		.bpRp = (bp_rp == 999.0) ? 999.0 : bp_rp * 0.1,
+	});
+}
+
+}  // namespace
+
+std::vector<CatalogStarMarker> scan_catalog_stars(
+		const astap::Header& head, int max_markers) {
+	std::vector<CatalogStarMarker> markers;
+	if (head.naxis == 0 || head.cd1_1 == 0.0 || max_markers <= 0) {
+		return markers;
+	}
+
+	auto telescope_ra  = 0.0;
+	auto telescope_dec = 0.0;
+	astap::core::pixel_to_celestial(head,
+	                                 (head.width  + 1) * 0.5,
+	                                 (head.height + 1) * 0.5,
+	                                 /*formalism=*/1,
+	                                 telescope_ra, telescope_dec);
+	const auto fov_org = std::sqrt(
+		(head.width  * head.cdelt1) * (head.width  * head.cdelt1) +
+		(head.height * head.cdelt2) * (head.height * head.cdelt2)) * kDeg2Rad;
+
+	const auto db_type = astap::reference::database_type;
+	markers.reserve(static_cast<std::size_t>(std::min(max_markers, 2048)));
+
+	if (db_type == 1476 || db_type == 290) {
+		// Tile-based: select up to 4 cells covering the FOV, stream each.
+		const auto tile_cap = (db_type == 1476) ? kTile1476 : kTile290;
+		const auto fov = std::min(fov_org, tile_cap);
+
+		auto area1 = 0, area2 = 0, area3 = 0, area4 = 0;
+		auto f1 = 0.0, f2 = 0.0, f3 = 0.0, f4 = 0.0;
+		astap::reference::find_areas(telescope_ra, telescope_dec, fov,
+		                              area1, area2, area3, area4,
+		                              f1, f2, f3, f4);
+		const std::array<int, 4> areas{area1, area2, area3, area4};
+
+		for (const auto area : areas) {
+			if (area == 0 || static_cast<int>(markers.size()) >= max_markers) {
+				continue;
+			}
+			if (!astap::reference::open_database(telescope_dec, area)) {
+				continue;
+			}
+			auto ra = 0.0, dec = 0.0, mag_x10 = 0.0, bp_rp = 999.0;
+			while (static_cast<int>(markers.size()) < max_markers
+				&& astap::reference::readdatabase290(
+					telescope_ra, telescope_dec, fov, ra, dec, mag_x10, bp_rp)) {
+				project_and_emit(head, ra, dec, mag_x10, bp_rp, markers);
+			}
+			astap::reference::close_star_database();
+		}
+	}
+	else if (db_type == 1) {
+		// Wide-field (w08): iterate the flat triples buffer.
+		if (astap::reference::wide_database != astap::reference::name_database) {
+			if (!astap::reference::read_stars_wide_field()) {
+				return markers;
+			}
+		}
+		const auto& buf = astap::reference::wide_field_stars;
+		const auto n = buf.size() / 3;
+		const auto sep_limit = std::min(
+			fov_org * 0.5 * 0.9 * (2.0 / std::sqrt(kPi)),
+			kPi * 0.5);
+		for (std::size_t i = 0; i < n && static_cast<int>(markers.size()) < max_markers; ++i) {
+			const auto mag_x10 = static_cast<double>(buf[i * 3 + 0]);
+			const auto ra      = static_cast<double>(buf[i * 3 + 1]);
+			const auto dec     = static_cast<double>(buf[i * 3 + 2]);
+			auto sep = 0.0;
+			astap::core::ang_sep(ra, dec, telescope_ra, telescope_dec, sep);
+			if (sep < sep_limit) {
+				project_and_emit(head, ra, dec, mag_x10, /*bp_rp=*/999.0, markers);
+			}
+		}
+	}
+	else {
+		// Online Gaia: caller is responsible for having populated the table.
+		const auto& odb = astap::reference::online_database;
+		if (odb[0].empty()) {
+			return markers;
+		}
+		for (std::size_t i = 0; i < odb[0].size() && static_cast<int>(markers.size()) < max_markers; ++i) {
+			const auto magf = odb[5][i];
+			if (magf == 0.0) continue;
+			project_and_emit(head, odb[0][i], odb[1][i],
+				/*mag_x10=*/magf * 10.0, /*bp_rp=*/999.0, markers);
+		}
+	}
+
+	// Brightest first so the viewer can draw big-to-small without overlap fights.
+	std::sort(markers.begin(), markers.end(),
+		[](const auto& a, const auto& b) { return a.magn < b.magn; });
+	return markers;
 }
 
 } // namespace astap::gui

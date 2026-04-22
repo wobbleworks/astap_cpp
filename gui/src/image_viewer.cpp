@@ -125,6 +125,16 @@ void ImageViewer::setConstellations(ConstellationOverlay overlay) {
 	update();
 }
 
+void ImageViewer::setCatalogStars(std::vector<CatalogStarMarker> markers) {
+	_catalogStars = std::move(markers);
+	update();
+}
+
+void ImageViewer::clearCatalogStars() {
+	_catalogStars.clear();
+	update();
+}
+
 void ImageViewer::clearConstellations() {
 	_constellations.lines.clear();
 	_constellations.labels.clear();
@@ -372,6 +382,69 @@ void ImageViewer::paintEvent(QPaintEvent* event) {
 		painter.setPen(QColor(100, 180, 255, 180));
 		for (const auto& lbl : _constellations.labels) {
 			painter.drawText(toViewport(lbl.x, lbl.y) + QPointF(4, -4), lbl.name);
+		}
+	}
+
+	// Catalog-star overlay: circles sized by magnitude, coloured by Bp-Rp,
+	// optional magnitude labels. Mirrors plot_and_measure_stars in the Pascal.
+	if (!_catalogStars.empty() && _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		// Map Bp-Rp (Gaia colour) to an RGB. Rough piecewise ramp:
+		//   Bp-Rp < 0.2 → blue-white
+		//   Bp-Rp 0.5-1.0 → yellowish
+		//   Bp-Rp 1.5-2.5+ → orange-red
+		//   Sentinel 999 (mono catalog) → neutral orange.
+		auto colourForBpRp = [](double bpRp) -> QColor {
+			if (bpRp == 999.0) {
+				return QColor(255, 180, 60, 230);
+			}
+			// Clamp to the visible range.
+			const auto t = std::clamp((bpRp - 0.0) / 3.0, 0.0, 1.0);
+			// 0 = blue-white, 0.5 = yellow-white, 1 = red.
+			const auto r = static_cast<int>(std::round(180 + (255 - 180) * t));
+			const auto g = static_cast<int>(std::round(220 - (220 - 120) * t));
+			const auto b = static_cast<int>(std::round(255 - (255 -  70) * t));
+			return QColor(std::clamp(r, 0, 255),
+			              std::clamp(g, 0, 255),
+			              std::clamp(b, 0, 255), 220);
+		};
+
+		QFont starFont = painter.font();
+		starFont.setPointSizeF(std::max(7.0, 8.0 * std::min(1.0, effectiveZoom)));
+		painter.setFont(starFont);
+
+		for (const auto& s : _catalogStars) {
+			const auto vp = toViewport(s.x, s.y);
+
+			// Pascal: len = (200 - magn*10) / 5.02 pixels. magn here is already
+			// the real magnitude (we stored mag*0.1 in scan_catalog_stars), so:
+			//   len = (20 - magn) / 5.02 * 10 = (200 - magn*10) / 5.02
+			const auto rawR = (200.0 - s.magn * 10.0) / 5.02;
+			const auto rPx  = std::max(1.5, rawR * effectiveZoom * 0.15);
+
+			auto pen = QPen(colourForBpRp(s.bpRp));
+			pen.setWidthF(1.0);
+			painter.setPen(pen);
+			painter.setBrush(Qt::NoBrush);
+			painter.drawEllipse(vp, rPx, rPx);
+
+			// Label only when zoomed in enough to read.
+			if (effectiveZoom >= 0.5) {
+				painter.drawText(vp + QPointF(rPx + 3, -rPx - 2),
+					QString::number(s.magn, 'f', 1));
+			}
 		}
 	}
 }

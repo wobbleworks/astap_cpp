@@ -98,4 +98,33 @@ struct ConstellationOverlay {
 
 [[nodiscard]] ConstellationOverlay build_constellation_overlay(const astap::Header& head);
 
+///----------------------------------------
+/// @struct CatalogStarMarker
+/// @brief A catalog star projected into pixel coordinates, with magnitude
+///        and colour information suitable for overlay rendering.
+///----------------------------------------
+
+struct CatalogStarMarker {
+	double x = 0.0;          ///< FITS pixel, 1-based
+	double y = 0.0;
+	double magn = 0.0;       ///< Gaia magnitude (e.g. 7.5)
+	double bpRp = 999.0;     ///< Gaia Bp-Rp colour (sentinel 999 = unknown/mono catalog)
+};
+
+///----------------------------------------
+/// @brief Scan the active star catalog for entries inside the solved image
+///        and return overlay markers.
+/// @details Uses whichever catalog `astap::reference::select_star_database`
+///          has chosen (local .1476/.290 tiles, wide-field w08, or online Gaia).
+///          Caller must ensure a catalog is loaded (e.g. via the plate
+///          solver or photometric calibration). Results are sorted
+///          brightest-first and capped at @p max_markers entries.
+/// @param head FITS header with a valid WCS solution.
+/// @param max_markers Upper bound on returned markers (typical: 1000).
+/// @return Overlay markers for catalog stars inside the field of view.
+///----------------------------------------
+
+[[nodiscard]] std::vector<CatalogStarMarker> scan_catalog_stars(
+    const astap::Header& head, int max_markers = 1000);
+
 } // namespace astap::gui

@@ -115,6 +115,7 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionAnalyse, &QAction::triggered, this, &MainWindow::analyseStars);
 	connect(_ui->actionInspect, &QAction::triggered, this, &MainWindow::inspectImage);
 	connect(_ui->actionAnnotate, &QAction::triggered, this, &MainWindow::annotateDeepSky);
+	connect(_ui->actionCatalogStars, &QAction::triggered, this, &MainWindow::overlayCatalogStars);
 	connect(_ui->actionPhotometry, &QAction::triggered, this, &MainWindow::openPhotometryDialog);
 	connect(_ui->actionSqm, &QAction::triggered, this, &MainWindow::openSqmDialog);
 	connect(_ui->actionStack, &QAction::triggered, this, [this]() {
@@ -825,6 +826,48 @@ void MainWindow::annotateDeepSky() {
 		tr("%1 deep-sky objects, %2 constellation lines")
 			.arg(markers.size())
 			.arg(consOverlay.lines.size()));
+}
+
+void MainWindow::overlayCatalogStars() {
+	if (astap::head.cdelt2 == 0.0) {
+		QMessageBox::information(this, tr("Catalog Star Overlay"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+
+	// Toggle behaviour: if an overlay is already showing, clear it.
+	if (!_ui->imageViewer->catalogStars().empty()) {
+		_ui->imageViewer->clearCatalogStars();
+		statusBar()->showMessage(tr("Catalog star overlay cleared"));
+		return;
+	}
+
+	// The plate-solve flow leaves `astap::reference::database_type` and the
+	// selected catalog name populated; scan_catalog_stars uses them.
+	if (astap::reference::name_database.empty()) {
+		if (!astap::reference::select_star_database("",
+				astap::head.height * std::abs(astap::head.cdelt2))) {
+			QMessageBox::warning(this, tr("Catalog Star Overlay"),
+				tr("No star catalog is available. Install the ASTAP catalog "
+				   "(e.g. d05 or d50) in the database path."));
+			return;
+		}
+	}
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	auto markers = scan_catalog_stars(astap::head, /*max_markers=*/1000);
+	QGuiApplication::restoreOverrideCursor();
+
+	if (markers.empty()) {
+		QMessageBox::information(this, tr("Catalog Star Overlay"),
+			tr("No catalog stars found in this field. Verify the plate solve "
+			   "and that the matching catalog covers this sky area."));
+		return;
+	}
+
+	const auto n = markers.size();
+	_ui->imageViewer->setCatalogStars(std::move(markers));
+	statusBar()->showMessage(tr("%1 catalog stars overlaid").arg(n));
 }
 
 void MainWindow::showSolverLog() {

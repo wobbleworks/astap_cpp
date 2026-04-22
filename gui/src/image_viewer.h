@@ -163,6 +163,11 @@ public:
 
 	void setConstellations(ConstellationOverlay overlay);
 	void clearConstellations();
+
+	/// @brief Install a catalog-star overlay (mag-labelled coloured circles).
+	void setCatalogStars(std::vector<CatalogStarMarker> markers);
+	void clearCatalogStars();
+	[[nodiscard]] const std::vector<CatalogStarMarker>& catalogStars() const noexcept { return _catalogStars; }
 	///@}
 
 	/// @name Saturation
@@ -235,6 +240,7 @@ private:
 
 	std::vector<DetectedStar> _stars;
 	std::vector<AnnotationMarker> _annotations;
+	std::vector<CatalogStarMarker> _catalogStars;
 	ConstellationOverlay _constellations;
 };
 
