@@ -20,10 +20,13 @@
 #include "fits.h"
 #include "photometry.h"
 #include "wcs.h"
+#include "../reference/online_gaia.h"
 #include "../reference/star_database.h"
+#include "../reference/stars_wide_field.h"
 
 #include <array>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -109,126 +112,217 @@ void plot_and_measure_stars(const ImageArray& img,
     }
     memo.push_back("Using star database " + astap::reference::name_database);
 
-    // The wide-field (type 1) and online-Gaia (type 0) paths are not yet ported
-    // in this translation unit; only the tile-based .1476 / .290 formats.
-    if (astap::reference::database_type != 1476 &&
-        astap::reference::database_type != 290) {
-        memo.push_back("Photometric calibration currently requires a .1476 or .290 "
-                       "database; wide-field and online catalogs are not yet supported.");
-        return;
-    }
-
     const auto passband = passband_for_database(astap::reference::name_database);
+    const auto db_type  = astap::reference::database_type;
 
-    // FOV clamp: a single database read pass must stay inside a tile so the
-    // reader never skips over a cell.
-    const auto tile_cap = (astap::reference::database_type == 1476)
-                             ? kTile1476 : kTile290;
-    const auto fov = std::min(fov_org, tile_cap);
-    if (fov_org > fov) {
-        max_nr_stars = static_cast<int>(
-            max_nr_stars * (fov * fov) / (fov_org * fov_org));
-    }
+    // Build a StarSource appropriate for the catalog type. Each source is a
+    // stateful iterator held via shared_ptr so calibrate_flux's std::function
+    // can move it around cheaply.
+    auto star_source = StarSource{};
 
-    // Identify up to four cell files covering the FOV.
-    auto area1 = 0, area2 = 0, area3 = 0, area4 = 0;
-    auto frac1 = 0.0, frac2 = 0.0, frac3 = 0.0, frac4 = 0.0;
-    astap::reference::find_areas(telescope_ra, telescope_dec, fov,
-                                  area1, area2, area3, area4,
-                                  frac1, frac2, frac3, frac4);
+    if (db_type == 1476 || db_type == 290) {
+        // --- Tile-based local catalog (.1476 / .290) ---
+        // FOV clamp: a single database read pass must stay inside a tile so
+        // the reader never skips over a cell.
+        const auto tile_cap = (db_type == 1476) ? kTile1476 : kTile290;
+        const auto fov = std::min(fov_org, tile_cap);
+        if (fov_org > fov) {
+            max_nr_stars = static_cast<int>(
+                max_nr_stars * (fov * fov) / (fov_org * fov_org));
+        }
 
-    const auto areas = std::array<int, 4>{area1, area2, area3, area4};
-    const auto fracs = std::array<double, 4>{frac1, frac2, frac3, frac4};
+        auto area1 = 0, area2 = 0, area3 = 0, area4 = 0;
+        auto frac1 = 0.0, frac2 = 0.0, frac3 = 0.0, frac4 = 0.0;
+        astap::reference::find_areas(telescope_ra, telescope_dec, fov,
+                                      area1, area2, area3, area4,
+                                      frac1, frac2, frac3, frac4);
 
-    // Build a StarSource that lazily walks the four tiles. The cumulative-
-    // fraction cap mirrors the Pascal's per-area `nrstars_required2` check.
-    struct CatalogIterator {
-        std::array<int, 4>    areas;
-        std::array<double, 4> fracs;
-        double telescope_ra;
-        double telescope_dec;
-        double fov;
-        int    max_nr_stars;
-        int    star_total_counter{0};
-        int    area_index{0};
-        double accumulated_frac{0.0};
-        bool   area_open{false};
+        struct TileIterator {
+            std::array<int, 4>    areas;
+            std::array<double, 4> fracs;
+            double telescope_ra;
+            double telescope_dec;
+            double fov;
+            int    max_nr_stars;
+            int    star_total_counter{0};
+            int    area_index{0};
+            double accumulated_frac{0.0};
+            bool   area_open{false};
 
-        bool next(CatalogStar& out) {
-            while (true) {
-                // Advance to the next area when the current one is exhausted or
-                // past its allotted share of stars.
-                while (area_index < 4) {
-                    const auto current_area = areas[area_index];
-                    if (current_area == 0) {
-                        ++area_index;
-                        continue;
+            bool next(CatalogStar& out) {
+                while (true) {
+                    while (area_index < 4) {
+                        const auto current_area = areas[area_index];
+                        if (current_area == 0) {
+                            ++area_index;
+                            continue;
+                        }
+                        const auto cumulative_cap =
+                            accumulated_frac + fracs[area_index];
+                        if (star_total_counter >=
+                            static_cast<int>(max_nr_stars * cumulative_cap)) {
+                            accumulated_frac = cumulative_cap;
+                            ++area_index;
+                            if (area_open) {
+                                astap::reference::close_star_database();
+                                area_open = false;
+                            }
+                            continue;
+                        }
+                        break;
                     }
-                    const auto cumulative_cap =
-                        accumulated_frac + fracs[area_index];
-                    if (star_total_counter >=
-                        static_cast<int>(max_nr_stars * cumulative_cap)) {
-                        accumulated_frac = cumulative_cap;
-                        ++area_index;
+                    if (area_index >= 4) {
                         if (area_open) {
                             astap::reference::close_star_database();
                             area_open = false;
                         }
-                        continue;
+                        return false;
                     }
-                    break;
-                }
-                if (area_index >= 4) {
-                    if (area_open) {
-                        astap::reference::close_star_database();
-                        area_open = false;
+
+                    if (!area_open) {
+                        if (!astap::reference::open_database(telescope_dec,
+                                                             areas[area_index])) {
+                            ++area_index;
+                            continue;
+                        }
+                        area_open = true;
                     }
-                    return false;
-                }
 
-                // Open the area's cell file on first touch.
-                if (!area_open) {
-                    if (!astap::reference::open_database(telescope_dec,
-                                                         areas[area_index])) {
-                        ++area_index;
-                        continue;
+                    auto ra  = 0.0;
+                    auto dec = 0.0;
+                    auto mag = 0.0;
+                    auto bp_rp = 999.0;
+                    if (astap::reference::readdatabase290(
+                            telescope_ra, telescope_dec, fov,
+                            ra, dec, mag, bp_rp)) {
+                        ++star_total_counter;
+                        out.ra    = ra;
+                        out.dec   = dec;
+                        out.magn  = mag;
+                        out.Bp_Rp = bp_rp;
+                        return true;
                     }
-                    area_open = true;
-                }
 
-                // Pull the next star out of the current cell.
-                auto ra  = 0.0;
-                auto dec = 0.0;
-                auto mag = 0.0;
-                auto bp_rp = 999.0;
-                if (astap::reference::readdatabase290(
-                        telescope_ra, telescope_dec, fov,
-                        ra, dec, mag, bp_rp)) {
-                    ++star_total_counter;
-                    out.ra    = ra;
-                    out.dec   = dec;
-                    out.magn  = mag;
-                    out.Bp_Rp = bp_rp;
-                    return true;
+                    accumulated_frac += fracs[area_index];
+                    ++area_index;
+                    astap::reference::close_star_database();
+                    area_open = false;
                 }
+            }
+        };
 
-                // End of this area file — advance and keep walking.
-                accumulated_frac += fracs[area_index];
-                ++area_index;
-                astap::reference::close_star_database();
-                area_open = false;
+        auto iter = std::make_shared<TileIterator>(TileIterator{
+            .areas = std::array<int, 4>{area1, area2, area3, area4},
+            .fracs = std::array<double, 4>{frac1, frac2, frac3, frac4},
+            .telescope_ra  = telescope_ra,
+            .telescope_dec = telescope_dec,
+            .fov = fov,
+            .max_nr_stars  = max_nr_stars,
+        });
+        star_source = [iter](CatalogStar& out) { return iter->next(out); };
+    }
+    else if (db_type == 1) {
+        // --- Wide-field single-file catalog (w08) ---
+        // Lazy-load into astap::reference::wide_field_stars if the cached
+        // copy is for a different database name.
+        if (astap::reference::wide_database != astap::reference::name_database) {
+            if (!astap::reference::read_stars_wide_field()) {
+                memo.push_back("Could not load wide-field star database from "
+                               "database_path.");
+                return;
             }
         }
-    };
 
-    auto iter = std::make_shared<CatalogIterator>(CatalogIterator{
-        .areas = areas,
-        .fracs = fracs,
-        .telescope_ra  = telescope_ra,
-        .telescope_dec = telescope_dec,
-        .fov = fov,
-        .max_nr_stars  = max_nr_stars,
-    });
+        // Layout is flat triples: [mag0, ra0, dec0, mag1, ra1, dec1, ...].
+        // Mag is already stored *10; ra/dec are in radians. Filter by angular
+        // separation from the telescope; the 2/sqrt(pi) factor converts the
+        // square FOV to an equivalent circle, the 0.9 is the Pascal's "trees
+        // and house corners" slop, pi/2 is the equatorial_standard limit.
+        const auto sep_limit = std::min(fov_org * 0.5 * 0.9 * (2.0 / std::sqrt(kPi)),
+                                        kPi * 0.5);
+
+        struct WideIterator {
+            double telescope_ra;
+            double telescope_dec;
+            double sep_limit;
+            int    max_nr_stars;
+            int    star_total_counter{0};
+            std::size_t index{0};
+
+            bool next(CatalogStar& out) {
+                const auto& buf = astap::reference::wide_field_stars;
+                const auto triples = buf.size() / 3;
+                while (star_total_counter < max_nr_stars && index < triples) {
+                    const auto magn = static_cast<double>(buf[index * 3 + 0]);
+                    const auto ra   = static_cast<double>(buf[index * 3 + 1]);
+                    const auto dec  = static_cast<double>(buf[index * 3 + 2]);
+                    ++index;
+
+                    auto sep = 0.0;
+                    ang_sep(ra, dec, telescope_ra, telescope_dec, sep);
+                    if (sep < sep_limit) {
+                        ++star_total_counter;
+                        out.ra    = ra;
+                        out.dec   = dec;
+                        out.magn  = magn;
+                        out.Bp_Rp = 999.0;  // mono catalog, no colour
+                        return true;
+                    }
+                }
+                return false;
+            }
+        };
+
+        auto iter = std::make_shared<WideIterator>(WideIterator{
+            .telescope_ra  = telescope_ra,
+            .telescope_dec = telescope_dec,
+            .sep_limit     = sep_limit,
+            .max_nr_stars  = max_nr_stars,
+        });
+        star_source = [iter](CatalogStar& out) { return iter->next(out); };
+    }
+    else {
+        // --- Online Gaia (database_type == 0) ---
+        // The caller is responsible for populating
+        // astap::reference::online_database via read_stars_online before this
+        // routine runs. Each column of the 6-row table corresponds to one
+        // catalog star. The "active" passband magnitude lives in row [5]
+        // (populated by read_stars_online; possibly remapped by
+        // convert_magnitudes to a transformed Johnson/Cousins/SDSS band).
+        const auto& odb = astap::reference::online_database;
+        if (odb[0].empty()) {
+            memo.push_back("Online Gaia catalog is empty; run read_stars_online "
+                           "before calibrating.");
+            return;
+        }
+
+        struct OnlineIterator {
+            std::size_t index{0};
+
+            bool next(CatalogStar& out) {
+                const auto& odb = astap::reference::online_database;
+                const auto n = odb[0].size();
+                while (index < n) {
+                    const auto ra   = odb[0][index];
+                    const auto dec  = odb[1][index];
+                    const auto magf = odb[5][index];
+                    ++index;
+
+                    if (magf == 0.0) { continue; }  // Pascal skips zero-mag entries.
+
+                    out.ra    = ra;
+                    out.dec   = dec;
+                    out.magn  = magf * 10.0;        // Pascal stores mag*10.
+                    out.Bp_Rp = 999.0;              // online table has no Bp-Rp column here.
+                    return true;
+                }
+                return false;
+            }
+        };
+
+        auto iter = std::make_shared<OnlineIterator>();
+        star_source = [iter](CatalogStar& out) { return iter->next(out); };
+    }
 
     // Extended-objects mode for SQM: aperture_setting=0 means the limiting-
     // magnitude calc uses a very large virtual aperture. Callers that want
@@ -238,12 +332,11 @@ void plot_and_measure_stars(const ImageArray& img,
     constexpr auto kAperture = 0.0;
 
     [[maybe_unused]] const auto result = calibrate_flux(
-        img, head, memo,
-        [iter](CatalogStar& out) { return iter->next(out); },
+        img, head, memo, star_source,
         passband, kAnnulusRadius, kAperture, report_lim_magnitude);
 
-    // Close any cell that stayed open (e.g. calibrate_flux stopped early
-    // before the StarSource reported exhaustion).
+    // Close any tile file that stayed open (e.g. calibrate_flux stopped early
+    // before the StarSource reported exhaustion). No-op for wide-field/online.
     astap::reference::close_star_database();
 }
 
