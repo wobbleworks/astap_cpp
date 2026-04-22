@@ -82,6 +82,10 @@ set(GUI_SOURCES
 	src/photometry_dialog.h
 	src/sqm_dialog.cpp
 	src/sqm_dialog.h
+	src/focus_dialog.cpp
+	src/focus_dialog.h
+	src/preferences_dialog.cpp
+	src/preferences_dialog.h
 	src/qt_image_decoder.cpp
 	src/qt_image_decoder.h
 )

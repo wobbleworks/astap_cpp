@@ -74,6 +74,8 @@
     <addaction name="actionSave"/>
     <addaction name="actionSaveAs"/>
     <addaction name="separator"/>
+    <addaction name="actionPreferences"/>
+    <addaction name="separator"/>
     <addaction name="actionQuit"/>
    </widget>
    <widget class="QMenu" name="menuView">
@@ -106,6 +108,7 @@
     <addaction name="separator"/>
     <addaction name="actionPhotometry"/>
     <addaction name="actionSqm"/>
+    <addaction name="actionFocus"/>
     <addaction name="separator"/>
     <addaction name="actionStack"/>
     <addaction name="actionLiveStack"/>
@@ -300,6 +303,22 @@
   <action name="actionSqm">
    <property name="text">
     <string>S&amp;ky Quality Meter…</string>
+   </property>
+  </action>
+  <action name="actionFocus">
+   <property name="text">
+    <string>&amp;Focus V-Curve Fit…</string>
+   </property>
+  </action>
+  <action name="actionPreferences">
+   <property name="text">
+    <string>&amp;Preferences…</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+,</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::PreferencesRole</enum>
    </property>
   </action>
  </widget>

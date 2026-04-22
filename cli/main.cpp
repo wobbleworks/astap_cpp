@@ -66,6 +66,7 @@
 #include "../src/core/sqm.h"            // calculate_sqm, bortle, altitudefloat, sqmfloat, airmass, centalt
 #include "../src/core/hjd.h"            // airmass_calc
 #include "../src/core/hyperbola.h"      // find_best_hyperbola_fit
+#include "../src/solving/focus_fit.h"   // fit_focus_hyperbola
 
 namespace astap::core {
 // Pascal: save_annotated_jpg (astap_main.pas:13040) — renders annotations
@@ -97,16 +98,7 @@ inline void do_stretching() noexcept {}
 inline void use_histogram(const astap::ImageArray& /*img*/, bool /*update_hist*/) {}
 }  // namespace astap::core
 
-namespace astap::solving {
-// CLI-level wrapper: loads each image, measures HFD, fits the hyperbola.
-// Backed by astap::core::find_best_hyperbola_fit (pure math, in core/hyperbola.h).
-struct FocusFitResult {
-    double focus_best;
-    double lowest_error;
-    bool   ok;
-};
-FocusFitResult fit_focus_hyperbola(std::span<const std::filesystem::path> images);
-}  // namespace astap::solving
+// fit_focus_hyperbola lives in src/solving/focus_fit.h.
 
 // All cross-module globals (esc_pressed, commandline_execution, filename2,
 // head, img_loaded, memo1_lines, memo2_lines, errorlevel, and the solver
@@ -438,6 +430,14 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
                                               astap::check_pattern_filter);
     if (!solved) {
         (void)astap::core::write_ini(output_base, false);
+        if (astap::commandline_log) {
+            auto logp = output_base;
+            logp.replace_extension(".log");
+            std::ofstream logf(logp);
+            for (auto const& line : astap::memo2_lines) logf << line << '\n';
+            logf << "--- memo1 (solver progress) ---\n";
+            for (auto const& line : astap::memo1_lines) logf << line << '\n';
+        }
         if (astap::errorlevel == 0) astap::errorlevel = 1;
         return astap::errorlevel;
     }
@@ -563,21 +563,6 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
 // -----------------------------------------------------------------------------
 // main
 // -----------------------------------------------------------------------------
-// Load each image, measure median HFD at the centre with
-// astap::core::HFD, then fit the focus-hyperbola via the ported pure-math
-// primitive. This is the CLI-level glue; the pure math lives in
-// astap::core::find_best_hyperbola_fit.
-namespace astap::solving {
-FocusFitResult fit_focus_hyperbola(std::span<const std::filesystem::path> images) {
-    FocusFitResult r{0.0, 0.0, false};
-    // TODO: extract focus_position from each frame (FOCUSPOS/FITS header) and
-    //       measure_hfd via astap::core::HFD. Pending core::HFD wire-up the
-    //       fit is deferred. The current stub reports ok=false so the CLI
-    //       exits with a non-zero errorlevel instead of emitting bogus data.
-    (void)images;
-    return r;
-}
-}  // namespace astap::solving
 
 int main(int argc, char* argv[]) {
     // Install the stb_image-backed raster decoder as the default. Hosts that

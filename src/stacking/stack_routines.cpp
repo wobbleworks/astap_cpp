@@ -310,6 +310,70 @@ void astrometric_to_vector() {
 }
 
 ///----------------------------------------
+/// MARK: wcs_to_vector
+///
+/// Build the first-order affine transform that maps a target-frame pixel to
+/// the reference-frame pixel space using the WCS already present in each
+/// frame's header. This is what the "WCS (header)" alignment mode uses.
+///
+/// No star detection or catalog matching. Requires both frames to have
+/// valid WCS (`cd1_1 != 0`). For small fields the affine approximation at
+/// the centre is accurate to well under a pixel; for very wide fields the
+/// residual grows with projection curvature (future work: add higher-order
+/// terms when needed).
+///----------------------------------------
+
+void wcs_to_vector() {
+    if (head.cd1_1 == 0.0 || head_ref.cd1_1 == 0.0) {
+        memo2_message("WCS alignment: missing WCS on target or reference; "
+                      "falling back to identity.");
+        reset_solution_vectors(1);
+        return;
+    }
+
+    // Project 3 points around the target-frame centre through the target's
+    // WCS to (ra, dec) and back through the reference's WCS to reference
+    // pixels. Three correspondences determine the 6-parameter affine.
+    const auto cx = head.width  * 0.5 + 0.5;   // FITS 1-based centre
+    const auto cy = head.height * 0.5 + 0.5;
+
+    struct Mapped { double x0; double y0; };
+    auto map_pt = [](double fitsX, double fitsY) -> Mapped {
+        auto ra = 0.0, dec = 0.0;
+        pixel_to_celestial(head, fitsX, fitsY, /*formalism=*/1, ra, dec);
+        auto refX = 0.0, refY = 0.0;
+        celestial_to_pixel(head_ref, ra, dec, refX, refY);
+        // calc_newx_newy expects 0-based output; subtract 1.
+        return {refX - 1.0, refY - 1.0};
+    };
+
+    const auto p0 = map_pt(cx,     cy);
+    const auto px = map_pt(cx + 1, cy);
+    const auto py = map_pt(cx,     cy + 1);
+
+    // Partial derivatives at the centre.
+    const auto a = px.x0 - p0.x0;  // ∂ref_x/∂target_x
+    const auto b = py.x0 - p0.x0;  // ∂ref_x/∂target_y
+    const auto d = px.y0 - p0.y0;
+    const auto e = py.y0 - p0.y0;
+
+    // Intercept: p0 = a*(cx-1) + b*(cy-1) + c  →  c = p0 - a*(cx-1) - b*(cy-1).
+    const auto c = p0.x0 - a * (cx - 1.0) - b * (cy - 1.0);
+    const auto f = p0.y0 - d * (cx - 1.0) - e * (cy - 1.0);
+
+    solution_vectorX[0] = a;
+    solution_vectorX[1] = b;
+    solution_vectorX[2] = c;
+    solution_vectorY[0] = d;
+    solution_vectorY[1] = e;
+    solution_vectorY[2] = f;
+
+    memo2_message("WCS alignment: centre maps to (" +
+        std::to_string(p0.x0) + ", " + std::to_string(p0.y0) +
+        "), scale [" + std::to_string(a) + ", " + std::to_string(e) + "].");
+}
+
+///----------------------------------------
 /// MARK: initialise_calc_sincos_dec0
 ///----------------------------------------
 
@@ -588,6 +652,8 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                     // Second image.
                     if (astap::skip_alignment) {
                         reset_solution_vectors(1);
+                    } else if (astap::use_wcs_alignment) {
+                        wcs_to_vector();
                     } else if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
@@ -930,6 +996,8 @@ void stack_average(int process_as_osc,
                 if (init) {
                     if (astap::skip_alignment) {
                         reset_solution_vectors(1);
+                    } else if (astap::use_wcs_alignment) {
+                        wcs_to_vector();
                     } else if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {

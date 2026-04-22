@@ -102,7 +102,6 @@ using astap::airmass;
 using astap::focus_temp;
 using astap::pressure;
 using astap::site_lat_radians;
-int focus_pos = 0;
 bool annotated = false;
 std::string sqm_value;
 double equinox = 2000;
@@ -229,7 +228,7 @@ void reset_fits_global_variables(bool light, astap::Header& head_out) noexcept {
         sitelat.clear(); sitelong.clear(); siteelev.clear();
         
         focus_temp = 999;
-        focus_pos = 0;
+        head_out.focus_pos = 0;
         pressure = 1010;
         airmass = 0;
         annotated = false;
@@ -730,7 +729,7 @@ bool load_fits(const std::filesystem::path& filen,
                         else if (starts_with(header, i + 3, "USPO") ||
                                  starts_with(header, i + 3, "POS "))
                             try {
-                                focus_pos = static_cast<int>(std::lround(vd(err)));
+                                head_out.focus_pos = static_cast<int>(std::lround(vd(err)));
                             } catch (...) {}
                         else if (starts_with(header, i + 3, "USTE") ||
                                  starts_with(header, i + 3, "TEMP"))

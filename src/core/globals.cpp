@@ -138,6 +138,7 @@ bool   check_pattern_filter  = false;
 bool   use_manual_align         = false;
 bool   use_ephemeris_alignment  = false;
 bool   use_astrometry_internal  = false;
+bool   use_wcs_alignment        = false;
 bool   skip_alignment           = false;
 double hfd_min_setting          = 0.0;    // 0 = auto (engine defaults to 0.8)
 double hfd_max_setting          = 10.0;   // Matches Pascal. Real stars fit well inside; extended sources (galaxies) are correctly excluded.

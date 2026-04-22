@@ -13,7 +13,9 @@
 #include "image_inspector_dialog.h"
 #include "live_stack_window.h"
 #include "log_window.h"
+#include "focus_dialog.h"
 #include "photometry_dialog.h"
+#include "preferences_dialog.h"
 #include "solve_dialog.h"
 #include "sqm_dialog.h"
 #include "stack_window.h"
@@ -118,6 +120,8 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionCatalogStars, &QAction::triggered, this, &MainWindow::overlayCatalogStars);
 	connect(_ui->actionPhotometry, &QAction::triggered, this, &MainWindow::openPhotometryDialog);
 	connect(_ui->actionSqm, &QAction::triggered, this, &MainWindow::openSqmDialog);
+	connect(_ui->actionFocus, &QAction::triggered, this, &MainWindow::openFocusDialog);
+	connect(_ui->actionPreferences, &QAction::triggered, this, &MainWindow::openPreferences);
 	connect(_ui->actionStack, &QAction::triggered, this, [this]() {
 		if (!_stackWindow) {
 			_stackWindow = new StackWindow(this);
@@ -793,6 +797,25 @@ void MainWindow::openSqmDialog() {
 	_sqmDialog->activateWindow();
 }
 
+void MainWindow::openFocusDialog() {
+	// Unlike SQM/photometry, Focus doesn't need a loaded image — the user
+	// picks the sweep's frames inside the dialog.
+	if (!_focusDialog) {
+		_focusDialog = new FocusDialog(this);
+	}
+	_focusDialog->show();
+	_focusDialog->raise();
+	_focusDialog->activateWindow();
+}
+
+void MainWindow::openPreferences() {
+	PreferencesDialog dlg(this);
+	if (dlg.exec() == QDialog::Accepted) {
+		// Refresh the recent-files menu in case it was cleared.
+		rebuildRecentMenu();
+	}
+}
+
 void MainWindow::annotateDeepSky() {
 	if (astap::head.cdelt2 == 0.0) {
 		QMessageBox::information(this, tr("Annotate"),
@@ -926,13 +949,38 @@ void MainWindow::restoreAppSettings() {
 }
 
 void MainWindow::showAbout() {
-	QMessageBox::about(
-		this,
-		tr("About ASTAP"),
-		tr("<h3>ASTAP</h3>"
-		   "<p>Astrometric STAcking Program — C++23 / Qt 6 port.</p>"
-		   "<p>Original ASTAP by Han Kleijn (www.hnsky.org).</p>"
-		   "<p>C++ port by John Stephen / wobbleworks.com.</p>"));
+	const auto version = QString::fromStdString(astap::astap_version);
+	const auto qtVer   = QString::fromLatin1(qVersion());
+	const auto dbPath  = QString::fromStdString(
+		astap::reference::database_path.string());
+	const auto dbName  = QString::fromStdString(
+		astap::reference::name_database);
+
+	const auto html = tr(
+		"<h3>ASTAP</h3>"
+		"<p><b>Astrometric STAcking Program</b> — C++23 / Qt 6 desktop port.</p>"
+		"<table cellpadding='3'>"
+		"<tr><td><b>Engine</b></td><td>%1</td></tr>"
+		"<tr><td><b>Qt</b></td><td>%2</td></tr>"
+		"<tr><td><b>Catalog</b></td><td>%3%4</td></tr>"
+		"</table>"
+		"<p>Original ASTAP by Han Kleijn "
+		"(<a href=\"https://www.hnsky.org\">hnsky.org</a>).<br>"
+		"C++ port by John Stephen / wobbleworks.com.</p>"
+		"<p>Licensed under the Mozilla Public License 2.0.</p>")
+		.arg(version.isEmpty() ? tr("unknown") : version,
+		     qtVer,
+		     dbName.isEmpty() ? tr("<i>none selected</i>") : dbName,
+		     dbPath.isEmpty() ? QString() : tr(" &nbsp;(%1)").arg(dbPath));
+
+	QMessageBox box(this);
+	box.setWindowTitle(tr("About ASTAP"));
+	box.setTextFormat(Qt::RichText);
+	box.setTextInteractionFlags(Qt::TextBrowserInteraction);
+	box.setText(html);
+	box.setIconPixmap({});   // No default icon — the HTML is self-contained.
+	box.addButton(QMessageBox::Close);
+	box.exec();
 }
 
 } // namespace astap::gui

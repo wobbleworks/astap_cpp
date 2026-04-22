@@ -164,6 +164,7 @@ extern bool   check_pattern_filter;        ///< @brief Pattern filter check enab
 extern bool   use_manual_align;            ///< @brief Align via manual-marked reference star.
 extern bool   use_ephemeris_alignment;     ///< @brief Align via ephemeris (comet/asteroid).
 extern bool   use_astrometry_internal;     ///< @brief Align via per-frame plate solve.
+extern bool   use_wcs_alignment;           ///< @brief Trust each frame's existing WCS header and compute the reprojection transform directly.
 extern bool   skip_alignment;              ///< @brief Use identity transform per frame (assumes pre-aligned inputs).
 extern double hfd_min_setting;             ///< @brief Minimum star HFD for stacking (0 = auto).
 extern double hfd_max_setting;             ///< @brief Maximum star HFD for stacking (default 10; raise for DSS2 plates).

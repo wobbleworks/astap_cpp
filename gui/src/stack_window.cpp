@@ -57,7 +57,8 @@ enum AlignmentIndex {
 	kAlignStarMatch = 0,
 	kAlignAstrometric = 1,
 	kAlignManual = 2,
-	kAlignNone = 3
+	kAlignNone = 3,
+	kAlignWcs = 4
 };
 
 // Channel role for LRGB stacking. "Light" is untagged / treated as a mono
@@ -282,6 +283,7 @@ void StackWindow::buildSettingsTab() {
 	_alignmentCombo->addItem(tr("Astrometric (per-frame solve)"), kAlignAstrometric);
 	_alignmentCombo->addItem(tr("Manual reference star"), kAlignManual);
 	_alignmentCombo->addItem(tr("None (pre-aligned)"), kAlignNone);
+	_alignmentCombo->addItem(tr("WCS (use each header's solution)"), kAlignWcs);
 	form->addRow(tr("Alignment:"), _alignmentCombo);
 
 	_sigmaFactor = new QDoubleSpinBox(page);
@@ -307,6 +309,7 @@ void StackWindow::applySettingsToEngine() {
 	astap::use_ephemeris_alignment = false;  // no ephemeris UI yet
 	astap::use_astrometry_internal = (align == kAlignAstrometric);
 	astap::skip_alignment          = (align == kAlignNone);
+	astap::use_wcs_alignment       = (align == kAlignWcs);
 
 	astap::sigma_clip_factor = _sigmaFactor->value();
 	astap::max_stars_setting = _maxStars->value();

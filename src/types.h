@@ -98,6 +98,7 @@ struct Header {
     int light_count{};
     int flat_count{};
     int flatdark_count{};
+    int focus_pos{};              // FOCUSPOS keyword: focuser stepper position.
 
     std::string egain;
     std::string gain;
