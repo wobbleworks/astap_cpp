@@ -27,6 +27,8 @@
 #include <vector>
 
 #include "ephemerides.h"   // ephem::precess_iau1976
+#include "globals.h"       // canonical engine globals (nrbits, bck, head, SIP coefs, ...)
+#include "sqm.h"           // astap::core::centalt / sitelat / sitelong
 
 ///----------------------------------------
 namespace astap::core {
@@ -57,53 +59,72 @@ std::string trim(std::string_view s) {
     return std::string(s.substr(first, last - first + 1));
 }
 
-// ----- TODO: extern globals from astap_main ---------------------------------
-// The C++ port will expose these from a global state header; declare here so
-// the body of the port type-checks. Default-init only; the real definitions
-// live elsewhere.
-double ra_mount = 999, dec_mount = 999;
-double ra_radians = 0, dec_radians = 0;
+// ----- Canonical engine globals --------------------------------------------
+// Replaces an earlier block of TU-local shadow definitions that silently
+// absorbed writes without propagating to the rest of the port (nrbits,
+// bayerpat, SIP coefficients, bck, head, etc.).
+using astap::ra_mount;
+using astap::dec_mount;
+using astap::ra_radians;
+using astap::dec_radians;
+using astap::xbayroff;
+using astap::ybayroff;
+using astap::roworder;
+using astap::a_order;
+using astap::ap_order;
+// ----- File-local FITS-parser state ----------------------------------------
 double focallen = 0;
 int subsamp = 1;
-int xbayroff = 0, ybayroff = 0;
-std::string roworder;
-double a_order = 0, ap_order = 0;
-double a_0_0=0,a_0_1=0,a_0_2=0,a_0_3=0,a_1_0=0,a_1_1=0,a_1_2=0,a_2_0=0,a_2_1=0,a_3_0=0;
-double b_0_0=0,b_0_1=0,b_0_2=0,b_0_3=0,b_1_0=0,b_1_1=0,b_1_2=0,b_2_0=0,b_2_1=0,b_3_0=0;
-double ap_0_0=0,ap_0_1=0,ap_0_2=0,ap_0_3=0,ap_1_0=0,ap_1_1=0,ap_1_2=0,ap_2_0=0,ap_2_1=0,ap_3_0=0;
-double bp_0_0=0,bp_0_1=0,bp_0_2=0,bp_0_3=0,bp_1_0=0,bp_1_1=0,bp_1_2=0,bp_2_0=0,bp_2_1=0,bp_3_0=0;
-std::string centalt, centaz;
+using astap::a_0_0; using astap::a_0_1; using astap::a_0_2; using astap::a_0_3;
+using astap::a_1_0; using astap::a_1_1; using astap::a_1_2;
+using astap::a_2_0; using astap::a_2_1;
+using astap::a_3_0;
+using astap::b_0_0; using astap::b_0_1; using astap::b_0_2; using astap::b_0_3;
+using astap::b_1_0; using astap::b_1_1; using astap::b_1_2;
+using astap::b_2_0; using astap::b_2_1;
+using astap::b_3_0;
+using astap::ap_0_0; using astap::ap_0_1; using astap::ap_0_2; using astap::ap_0_3;
+using astap::ap_1_0; using astap::ap_1_1; using astap::ap_1_2;
+using astap::ap_2_0; using astap::ap_2_1;
+using astap::ap_3_0;
+using astap::bp_0_0; using astap::bp_0_1; using astap::bp_0_2; using astap::bp_0_3;
+using astap::bp_1_0; using astap::bp_1_1; using astap::bp_1_2;
+using astap::bp_2_0; using astap::bp_2_1;
+using astap::bp_3_0;
+std::string centaz;
 std::array<double, 20> x_coeff{}, y_coeff{};
 std::array<double, 20> ppo_coeff{};
-std::string telescop, instrum, origin, object_name;
-std::string sitelat, sitelong, siteelev;
+using astap::instrum;
+using astap::object_name;
+std::string telescop, origin;
+std::string siteelev;
+// astap::airmass and astap::core::airmass both exist; the canonical one the
+// FITS loader writes to is the top-level astap::airmass. Qualify each use at
+// the callsite rather than `using` to avoid the ambiguity.
 double focus_temp = 999;
 int focus_pos = 0;
 double pressure = 1010;
-double airmass = 0;
 bool annotated = false;
 double site_lat_radians = 999;
 std::string sqm_value;
 double equinox = 2000;
 std::string imagetype;
-std::string bayerpat;
-int nrbits = 0;
-int extend_type = 0;  // 0 image / 1 image-ext / 2 ascii table / 3 bintable
+using astap::bayerpat;
+using astap::nrbits;
+using astap::extend_type;
+using astap::unsaved_import;
 bool last_extension = true;
-bool unsaved_import = false;
 double bandpass = 0;
 double plate_ra = 0, plate_dec = 0;
 int dec_sign = 1;
 double x_pixel_size = 0, y_pixel_size = 0;
 int x_pixel_offset = 0, y_pixel_offset = 0;
-double cwhite = 0;
-astap::Background bck{};
-bool sip = false;
-std::string filename2;
-bool esc_pressed = false;
-std::array<std::string, 1> head1{};  // placeholder for the saved primary card
+using astap::cwhite;
+using astap::bck;
+using astap::sip;
+using astap::filename2;
+using astap::head;
 std::string sqm_key = "SQM     ";  // 8 chars; adjustable in the original
-astap::Header head{};               // global "current head" (not the one passed in)
 
 // ----- TODO: GUI helpers replaced with stubs --------------------------------
 void memo2_message(const std::string& /*msg*/) {
@@ -212,7 +233,7 @@ void reset_fits_global_variables(bool light, astap::Header& head_out) noexcept {
         focus_temp = 999;
         focus_pos = 0;
         pressure = 1010;
-        airmass = 0;
+        ::astap::airmass = 0;
         annotated = false;
         site_lat_radians = 999;
         
@@ -557,7 +578,7 @@ bool load_fits(const std::filesystem::path& filen,
                                 }
                             }
                         } else if (starts_with(header, i + 1, "IRMAS"))
-                            airmass = vd(err);
+                            ::astap::airmass = vd(err);
                             
                         if (header[i + 1] == '_') {
                             // SIP A_*
@@ -1235,7 +1256,7 @@ void read_keys_memo(bool light, astap::Header& head_out,
         else if (key == "XBAYROFF=") xbayroff = static_cast<int>(std::lround(read_float_card(line)));
         else if (key == "YBAYROFF=") ybayroff = static_cast<int>(std::lround(read_float_card(line)));
         else if (key == "PRESSURE=") pressure = std::lround(read_float_card(line));
-        else if (key == "AIRMASS =") airmass = std::lround(read_float_card(line));
+        else if (key == "AIRMASS =") ::astap::airmass = std::lround(read_float_card(line));
         else if (key == "AOCBAROM=") pressure = std::lround(read_float_card(line));
         else if (key == "FOCUSTEM=" || key == "FOCTEMP =" ||
                  key == "AMB-TEMP=" || key == "AOCAMBT =")
