@@ -69,6 +69,7 @@ using astap::bp_0_0; using astap::bp_0_1; using astap::bp_0_2; using astap::bp_0
 using astap::bp_1_0; using astap::bp_1_1; using astap::bp_1_2;
 using astap::bp_2_0; using astap::bp_2_1;
 using astap::bp_3_0;
+using astap::bck;
 using astap::reference::name_database;
 using astap::reference::wide_database;
 using astap::reference::wide_field_stars;
@@ -103,8 +104,6 @@ struct StackMenuConfig {
 // Each function preserves the local signature expected by solve_image's
 // call sites while forwarding to the real implementation in the correct
 // namespace (astap::core, astap::reference, astap::stacking).
-
-astap::Background bck;
 StackMenuConfig stackcfg;
 
 inline void find_areas(double ra, double dec, double fov,
@@ -761,6 +760,7 @@ void binX2_crop(double crop, const ImageArray& img, ImageArray& img2) {
 
 void bin_and_find_stars(const ImageArray& img,
                         int binning, double cropping, double hfd_min,
+                        double hfd_max,
                         int max_stars, bool get_hist,
                         StarList& starlist3, std::string& short_warning) {
     short_warning.clear();
@@ -796,7 +796,7 @@ void bin_and_find_stars(const ImageArray& img,
         }
         
         get_background(0, img_binned, true, true, bck);
-        find_stars(img_binned, hfd_min, max_stars, bck, starlist3);
+        find_stars(img_binned, hfd_min, hfd_max, max_stars, bck, starlist3);
         
         if (static_cast<int>(img_binned[0].size()) < 960) {
             short_warning = "Warning, remaining image dimensions too low! ";
@@ -831,7 +831,7 @@ void bin_and_find_stars(const ImageArray& img,
         }
         
         get_background(0, img, get_hist, true, bck);
-        find_stars(img, hfd_min, max_stars, bck, starlist3);
+        find_stars(img, hfd_min, hfd_max, max_stars, bck, starlist3);
     }
 }
 
@@ -1027,8 +1027,8 @@ bool solve_image(ImageArray& img, Header& hd,
         hfd_min = std::max(0.8,
             min_star_size_arcsec / (binning * fov_org * 3600.0 / hd.height));
             
-        bin_and_find_stars(img, binning, cropping, hfd_min, max_stars, get_hist,
-                           starlist2, warning_downsample);
+        bin_and_find_stars(img, binning, cropping, hfd_min, /*hfd_max=*/10.0,
+                           max_stars, get_hist, starlist2, warning_downsample);
         nrstars = static_cast<int>(starlist2[0].size());
         
         if (hd.xpixsz != 0.0 && hd.ypixsz != 0.0 &&

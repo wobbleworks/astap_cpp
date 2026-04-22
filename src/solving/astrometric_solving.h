@@ -58,6 +58,7 @@ using astap::Header;
 ///      @param binning Downsampling factor (1, 2, 3, 4).
 ///      @param cropping Fractional crop (1.0 = no crop).
 ///      @param hfd_min Minimum half-flux diameter for detections.
+///      @param hfd_max Maximum half-flux diameter for detections (10 matches the Pascal original; raise for DSS2 / wide-bloom plates).
 ///      @param max_stars Maximum number of stars to retain.
 ///      @param get_hist Whether to include histogram metrics while measuring background.
 /// @param[out] starlist3 Detected star positions (2xN).
@@ -68,6 +69,7 @@ void bin_and_find_stars(const ImageArray& img,
                         int binning,
                         double cropping,
                         double hfd_min,
+                        double hfd_max,
                         int max_stars,
                         bool get_hist,
                         StarList& starlist3,

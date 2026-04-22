@@ -263,6 +263,7 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
     auto warning = std::string{};
     bin_and_find_stars(astap::img_loaded, binning_, /*cropping=*/1.0,
                        /*hfd_min=*/std::max(0.8, astap::hfd_min_setting),
+                       /*hfd_max=*/astap::hfd_max_setting,
                        astap::max_stars_setting,
                        /*get_hist=*/true, starlist, warning);
 

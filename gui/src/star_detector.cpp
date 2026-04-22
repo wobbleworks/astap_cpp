@@ -41,12 +41,12 @@ DetectionResult detect_stars(const astap::ImageArray& img, double snr_min) {
 	auto visited = std::vector<std::vector<std::uint8_t>>(
 		height, std::vector<std::uint8_t>(width, 0));
 
-	// Retry ladder from analyse_image: try the bright-star threshold first;
-	// if that finds nothing, fall back to progressively deeper noise-floor
-	// thresholds. Unlike analyse_image we always try the deepest fallback
-	// (7·σ) if earlier attempts didn't hit — that matches the Pascal
-	// behaviour more faithfully and surfaces stars on stretched images
-	// whose bright-star threshold is dominated by gradient.
+	// Retry ladder from find_stars: run all levels in order (brightest → 7σ),
+	// resetting mask and star list each time. Each retry is an independent
+	// scan; the final level's result is what we return. This matches the
+	// Pascal behaviour and ensures faint stars surface even when the image
+	// also contains much brighter sources (e.g. a galaxy) that would
+	// satisfy an earlier "got something, stop" check.
 	const auto hfd_min = 0.8;
 
 	// Ladder: (threshold value, retries-label for diagnostics)
@@ -61,8 +61,12 @@ DetectionResult detect_stars(const astap::ImageArray& img, double snr_min) {
 	if (bck.star_level2 > 30 * bck.noise_level) {
 		levels.push_back({bck.star_level2, 2});
 	}
-	levels.push_back({30 * bck.noise_level, 1});
-	levels.push_back({ 7 * bck.noise_level, 0});
+	levels.push_back({30 * bck.noise_level,  1});
+	levels.push_back({ 7 * bck.noise_level,  0});
+	// Last-resort floor for low-contrast / noisy fields (e.g. DSS2 plates
+	// where the green/i bands have only a handful of bright sources above
+	// 7σ). HFD and SNR gates remain the final filters.
+	levels.push_back({ 3 * bck.noise_level, -1});
 
 	astap::core::HfdScratch scratch{};
 
@@ -93,7 +97,19 @@ DetectionResult detect_stars(const astap::ImageArray& img, double snr_min) {
 					/*aperture_small=*/99.0, /*adu_e=*/0.0,
 					/*xbinning=*/1.0, r, scratch);
 
-				if (r.hfd <= 30.0 && r.snr > snr_min && r.hfd > hfd_min) {
+				if (r.hfd <= 10.0 && r.snr > snr_min && r.hfd > hfd_min) {
+					const auto cx = static_cast<int>(std::round(r.xc));
+					const auto cy = static_cast<int>(std::round(r.yc));
+
+					// If HFD's refined centroid landed inside an existing
+					// mask, this is the same extended source (e.g. galaxy
+					// halo) we already accepted — skip.
+					if (cx >= 0 && cx < width && cy >= 0 && cy < height
+							&& visited[cy][cx]) {
+						++out.candidatesRejected;
+						continue;
+					}
+
 					DetectedStar s;
 					// FITS convention: 1-based pixel coordinates.
 					s.x = r.xc + 1.0;
@@ -104,12 +120,11 @@ DetectionResult detect_stars(const astap::ImageArray& img, double snr_min) {
 					s.flux = r.flux;
 					out.stars.push_back(s);
 
-					// Mask a circular exclusion zone so we don't re-detect
-					// the same star from a nearby bright pixel.
-					const auto radius = static_cast<int>(std::round(3.0 * r.hfd));
+					// Mask a circular exclusion zone. 1.5*HFD matches
+					// find_stars and analyse_image — 3*HFD (Pascal original)
+					// merges distinct stars ~10-15 pixels apart.
+					const auto radius = static_cast<int>(std::round(1.5 * r.hfd));
 					const auto sqrRadius = radius * radius;
-					const auto cx = static_cast<int>(std::round(r.xc));
-					const auto cy = static_cast<int>(std::round(r.yc));
 					for (auto n = -radius; n <= radius; ++n) {
 						for (auto m = -radius; m <= radius; ++m) {
 							const auto j = n + cy;
@@ -126,9 +141,6 @@ DetectionResult detect_stars(const astap::ImageArray& img, double snr_min) {
 			}
 		}
 
-		if (!out.stars.empty()) {
-			break;
-		}
 	}
 
 	// Median HFD for convenience

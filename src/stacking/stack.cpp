@@ -1272,18 +1272,36 @@ void analyse_image(const ImageArray& img,
                         auto yc = 0.0;
                         hfd_measure(img, fitsX, fitsY, 14, 99, 0.0,
                                     hfd1, fwhm, snr, flux, xc, yc);
-                        if (hfd1 <= 30.0 && snr > snr_min && hfd1 > hfd_min) {
+                        // HFD ceiling of 10 rejects extended sources (galaxies,
+                        // nebulosity). Was 30 in the initial port, which let
+                        // galactic cores through as "stars". Compact galaxy
+                        // cores (NGC 990) can still produce HFD ~9.5 which
+                        // passes — treat them as valid alignment features
+                        // (stable centroid across frames).
+                        if (hfd1 <= 10.0 && snr > snr_min && hfd1 > hfd_min) {
+                            const auto xci = static_cast<int>(std::round(xc));
+                            const auto yci = static_cast<int>(std::round(yc));
+
+                            // Re-check the mask at the refined centroid — for
+                            // extended sources, a halo pixel outside the first
+                            // mask triggers HFD whose centroid then drifts
+                            // back into the already-accepted region. Skip it.
+                            if (xci >= 0 && xci < width5 && yci >= 0 && yci < height5
+                                    && img_sa[0][yci][xci] > 0.0f) {
+                                continue;
+                            }
+
                             if (star_counter >= len) {
                                 len += 1000;
                                 hfd_list.resize(len);
                             }
                             hfd_list[star_counter++] = hfd1;
-                            
-                            // Mark a circular exclusion zone around the star
-                            auto radius = static_cast<int>(std::round(3.0 * hfd1));
-                            auto sqr_radius = radius * radius;
-                            auto xci = static_cast<int>(std::round(xc));
-                            auto yci = static_cast<int>(std::round(yc));
+
+                            // Mark a circular exclusion zone around the star.
+                            // 1.5*HFD matches find_stars; 3*HFD (original)
+                            // merges distinct stars ~10 pixels apart.
+                            const auto radius = static_cast<int>(std::round(1.5 * hfd1));
+                            const auto sqr_radius = radius * radius;
                             for (auto n = -radius; n <= radius; ++n) {
                                 for (auto m = -radius; m <= radius; ++m) {
                                     auto j = n + yci;

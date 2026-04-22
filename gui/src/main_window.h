@@ -60,6 +60,8 @@ private slots:
 	void saveFile();
 	void saveFileAs();
 	void inspectImage();
+	void openPhotometryDialog();
+	void openSqmDialog();
 
 protected:
 	void closeEvent(QCloseEvent* event) override;
@@ -83,6 +85,8 @@ private:
 	class StackWindow* _stackWindow = nullptr;
 	class ImageInspectorDialog* _inspectorDialog = nullptr;
 	class LiveStackWindow* _liveStackWindow = nullptr;
+	class PhotometryDialog* _photometryDialog = nullptr;
+	class SqmDialog* _sqmDialog = nullptr;
 	class QMenu* _recentMenu = nullptr;
 
 	// Permanent status-bar widgets (cursor pixel, cursor celestial, image dims).

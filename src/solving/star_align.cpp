@@ -8,6 +8,7 @@
 
 #include "star_align.h"
 
+#include "../core/globals.h"
 #include "../core/photometry.h"
 
 #include <algorithm>
@@ -740,7 +741,8 @@ void find_quads_xy(const StarList& starlist, StarList& starlistquads) {
     resize_2d_preserve(starlistquads, 10, static_cast<std::size_t>(nrquads));
 }
 
-void find_stars(const ImageArray& img, double hfd_min, int max_stars,
+void find_stars(const ImageArray& img, double hfd_min, double hfd_max,
+                int max_stars,
                 const Background& bck, StarList& starlist1) {
     constexpr auto buffersize = 5000;
 
@@ -762,6 +764,12 @@ void find_stars(const ImageArray& img, double hfd_min, int max_stars,
     auto retries     = 3;
     auto nrstars     = 0;
     auto highest_snr = 0.0;
+
+    // HFD search radius (aperture-growth cap). 14 matches the Pascal original
+    // and handles star HFDs up to ~10 comfortably. Extended sources with
+    // HFD > 14 land in the aperture_cap exit and get rejected — which is
+    // what we want (they are galaxies or nebulosity, not stars).
+    constexpr auto rs = 14;
 
     astap::core::HfdScratch scratch{};
 
@@ -787,6 +795,12 @@ void find_stars(const ImageArray& img, double hfd_min, int max_stars,
         if (retries == 0) {
             detection_level = 7 * bck.noise_level;
         }
+        if (retries == -1) {
+            // Last-resort floor for low-contrast images (e.g. DSS2 photographic
+            // plates) where 7*noise still rejects genuine faint stars. SNR > 10
+            // and HFD gates remain the final filters.
+            detection_level = 3 * bck.noise_level;
+        }
 
         highest_snr = 0.0;
         nrstars     = 0;
@@ -805,15 +819,28 @@ void find_stars(const ImageArray& img, double hfd_min, int max_stars,
                 }
 
                 astap::core::HfdResult r;
-                astap::core::HFD(img, fitsX, fitsY, /*rs=*/14,
+                astap::core::HFD(img, fitsX, fitsY, rs,
                     /*aperture_small=*/99.0, /*adu_e=*/0.0,
                     /*xbinning=*/1.0, r, scratch);
-
-                if (r.hfd <= 10.0 && r.snr > 10.0 && r.hfd > hfd_min) {
-                    const auto radius     = static_cast<int>(std::lround(3.0 * r.hfd));
+                if (r.hfd <= hfd_max && r.snr > 10.0 && r.hfd > hfd_min) {
+                    // 1.5*HFD disk is wide enough to mask a star's own core
+                    // (preventing re-detection) but narrow enough not to
+                    // suppress a legitimate neighbour. Pascal uses 3*HFD
+                    // which merges distinct stars ~10px apart.
+                    const auto radius     = static_cast<int>(std::lround(1.5 * r.hfd));
                     const auto sqr_radius = radius * radius;
                     const auto xci        = static_cast<int>(std::lround(r.xc));
                     const auto yci        = static_cast<int>(std::lround(r.yc));
+
+                    // If HFD's refined centroid landed inside an existing
+                    // mask, we just re-detected a source we already recorded
+                    // (typical for wide extended sources like galaxies where
+                    // a halo pixel outside the first mask triggers HFD and
+                    // its centroid drifts back to the galaxy core). Skip.
+                    if (xci >= 0 && xci < width2 && yci >= 0 && yci < height2
+                            && img_sa[0][yci][xci] > 0.0f) {
+                        continue;
+                    }
 
                     for (int n = -radius; n <= radius; ++n) {
                         for (int m = -radius; m <= radius; ++m) {
@@ -842,8 +869,9 @@ void find_stars(const ImageArray& img, double hfd_min, int max_stars,
                 }
             }
         }
+
         --retries;
-    } while (!(nrstars >= max_stars || retries < 0));
+    } while (!(nrstars >= max_stars || retries < -1));
 
     img_sa.clear();
 

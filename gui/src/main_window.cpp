@@ -13,7 +13,9 @@
 #include "image_inspector_dialog.h"
 #include "live_stack_window.h"
 #include "log_window.h"
+#include "photometry_dialog.h"
 #include "solve_dialog.h"
+#include "sqm_dialog.h"
 #include "stack_window.h"
 #include "star_detector.h"
 #include "ui_main_window.h"
@@ -22,6 +24,7 @@
 #include "../../src/core/globals.h"
 #include "../../src/core/image_io.h"
 #include "../../src/core/wcs.h"
+#include "../../src/image/tiff.h"
 #include "../../src/reference/star_database.h"
 #include "../../src/solving/astrometric_solving.h"
 
@@ -112,6 +115,8 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionAnalyse, &QAction::triggered, this, &MainWindow::analyseStars);
 	connect(_ui->actionInspect, &QAction::triggered, this, &MainWindow::inspectImage);
 	connect(_ui->actionAnnotate, &QAction::triggered, this, &MainWindow::annotateDeepSky);
+	connect(_ui->actionPhotometry, &QAction::triggered, this, &MainWindow::openPhotometryDialog);
+	connect(_ui->actionSqm, &QAction::triggered, this, &MainWindow::openSqmDialog);
 	connect(_ui->actionStack, &QAction::triggered, this, [this]() {
 		if (!_stackWindow) {
 			_stackWindow = new StackWindow(this);
@@ -590,31 +595,145 @@ void MainWindow::saveFile() {
 	}
 }
 
+namespace {
+
+/// @brief Clamp a float sample to [0, 65535] and round to 16-bit integer.
+[[nodiscard]] std::uint16_t clamp_u16(float v) noexcept {
+	if (!(v > 0.0f)) {
+		return 0;
+	}
+	if (v >= 65535.0f) {
+		return 65535;
+	}
+	return static_cast<std::uint16_t>(v + 0.5f);
+}
+
+/// @brief Build a 16-bit QImage from the raw (un-stretched) image data.
+/// @details Uses @c QImage::Format_Grayscale16 for single-channel sources and
+///          @c QImage::Format_RGBX64 for three-channel. Bayer frames are
+///          exported via the grayscale path. Pixel values are clamped to
+///          [0, 65535] to fit the 16-bit container — this preserves full
+///          precision for 16-bit inputs and loses nothing of consequence for
+///          stacked float results (the science value is linear even after
+///          clamp, since very bright stars are already saturated anyway).
+[[nodiscard]] QImage build_raw_16bit_image(const astap::ImageArray& img) {
+	if (img.empty() || img[0].empty() || img[0][0].empty()) {
+		return {};
+	}
+	const auto height = static_cast<int>(img[0].size());
+	const auto width  = static_cast<int>(img[0][0].size());
+	const auto channels = static_cast<int>(img.size());
+
+	if (channels >= 3) {
+		// 16-bit-per-channel RGBA; alpha set to 65535 (opaque).
+		QImage out(width, height, QImage::Format_RGBX64);
+		for (int y = 0; y < height; ++y) {
+			auto* row = reinterpret_cast<quint16*>(out.scanLine(y));
+			for (int x = 0; x < width; ++x) {
+				row[x * 4 + 0] = clamp_u16(img[0][y][x]);
+				row[x * 4 + 1] = clamp_u16(img[1][y][x]);
+				row[x * 4 + 2] = clamp_u16(img[2][y][x]);
+				row[x * 4 + 3] = 65535;
+			}
+		}
+		return out;
+	}
+
+	QImage out(width, height, QImage::Format_Grayscale16);
+	for (int y = 0; y < height; ++y) {
+		auto* row = reinterpret_cast<quint16*>(out.scanLine(y));
+		for (int x = 0; x < width; ++x) {
+			row[x] = clamp_u16(img[0][y][x]);
+		}
+	}
+	return out;
+}
+
+}  // namespace
+
 void MainWindow::saveFileAs() {
+	// Multi-format save. Filter order matches the extension-dispatch order
+	// below so the dialog's "save as type" preselects the right handler.
+	auto selectedFilter = QString{};
 	const auto path = QFileDialog::getSaveFileName(
 		this,
-		tr("Save As FITS"),
+		tr("Save As"),
 		QString(),
-		tr("FITS images (*.fits);;All files (*)"));
+		tr("FITS images (*.fits *.fit *.fts);;"
+		   "TIFF images (*.tif *.tiff);;"
+		   "PNG images (*.png);;"
+		   "JPEG images (*.jpg *.jpeg);;"
+		   "All files (*)"),
+		&selectedFilter);
 	if (path.isEmpty()) {
 		return;
 	}
 
-	auto memo = astap::memo1_lines;
-	sanitize_memo_for_save(memo);
+	// Resolve format from the chosen extension. Append one from the filter if
+	// the user did not type one.
+	auto suffix = QFileInfo(path).suffix().toLower();
+	auto outPath = path;
+	if (suffix.isEmpty()) {
+		if      (selectedFilter.contains("TIFF")) { suffix = "tif";  outPath += ".tif";  }
+		else if (selectedFilter.contains("PNG"))  { suffix = "png";  outPath += ".png";  }
+		else if (selectedFilter.contains("JPEG")) { suffix = "jpg";  outPath += ".jpg";  }
+		else                                      { suffix = "fits"; outPath += ".fits"; }
+	}
 
-	const auto ok = astap::core::save_fits(
-		astap::img_loaded,
-		memo,
-		std::filesystem::path(path.toStdString()),
-		/*type1=*/16,
-		/*override2=*/true);
+	auto ok = false;
+
+	if (suffix == "fits" || suffix == "fit" || suffix == "fts") {
+		auto memo = astap::memo1_lines;
+		sanitize_memo_for_save(memo);
+		ok = astap::core::save_fits(
+			astap::img_loaded,
+			memo,
+			std::filesystem::path(outPath.toStdString()),
+			/*type1=*/16,
+			/*override2=*/true);
+	}
+	else if (suffix == "tif" || suffix == "tiff") {
+		// 16-bit grayscale or 48-bit RGB depending on channel count.
+		const auto channels = astap::img_loaded.size();
+		const auto stdPath = std::filesystem::path(outPath.toStdString());
+		const auto desc = "Saved by ASTAP";
+		if (channels >= 3) {
+			ok = astap::image::save_tiff_48(astap::img_loaded, stdPath,
+				desc, /*flip_h=*/false, /*flip_v=*/false);
+		} else {
+			ok = astap::image::save_tiff_16(astap::img_loaded, stdPath,
+				desc, /*flip_h=*/false, /*flip_v=*/false);
+		}
+	}
+	else if (suffix == "png") {
+		// Raw 16-bit export — preserves scientific value. Qt writes
+		// 16-bit PNG when the source QImage is Format_Grayscale16 /
+		// Format_RGBX64.
+		const auto img = build_raw_16bit_image(astap::img_loaded);
+		if (!img.isNull()) {
+			ok = img.save(outPath, "PNG");
+		}
+	}
+	else if (suffix == "jpg" || suffix == "jpeg") {
+		// JPEG is 8-bit only, so use the viewer's stretched render —
+		// that's what the user actually wants to share.
+		const auto& rendered = _ui->imageViewer->renderedImage();
+		if (!rendered.isNull()) {
+			ok = rendered.save(outPath, "JPEG", /*quality=*/92);
+		}
+	}
+	else {
+		QMessageBox::warning(this, tr("Save As"),
+			tr("Unsupported extension: .%1").arg(suffix));
+		return;
+	}
+
 	if (ok) {
-		astap::filename2 = path.toStdString();
-		statusBar()->showMessage(tr("Saved to %1").arg(path));
+		astap::filename2 = outPath.toStdString();
+		statusBar()->showMessage(tr("Saved to %1").arg(outPath));
 	} else {
 		QMessageBox::warning(this, tr("Save As"),
-			tr("Failed to save %1.").arg(path));
+			tr("Failed to save %1.").arg(outPath));
 	}
 }
 
@@ -631,6 +750,46 @@ void MainWindow::inspectImage() {
 	_inspectorDialog->raise();
 	_inspectorDialog->activateWindow();
 	_inspectorDialog->analyseCurrentImage();
+}
+
+void MainWindow::openPhotometryDialog() {
+	if (!_ui->imageViewer->hasImage()) {
+		QMessageBox::information(this, tr("Photometric Calibration"),
+			tr("Open an image first."));
+		return;
+	}
+	if (astap::head.cd1_1 == 0.0) {
+		QMessageBox::information(this, tr("Photometric Calibration"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (!_photometryDialog) {
+		_photometryDialog = new PhotometryDialog(this);
+	}
+	_photometryDialog->prefillFromSettings();
+	_photometryDialog->show();
+	_photometryDialog->raise();
+	_photometryDialog->activateWindow();
+}
+
+void MainWindow::openSqmDialog() {
+	if (!_ui->imageViewer->hasImage()) {
+		QMessageBox::information(this, tr("Sky Quality Meter"),
+			tr("Open an image first."));
+		return;
+	}
+	if (astap::head.cd1_1 == 0.0) {
+		QMessageBox::information(this, tr("Sky Quality Meter"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (!_sqmDialog) {
+		_sqmDialog = new SqmDialog(this);
+	}
+	_sqmDialog->prefillFromSettings();
+	_sqmDialog->show();
+	_sqmDialog->raise();
+	_sqmDialog->activateWindow();
 }
 
 void MainWindow::annotateDeepSky() {

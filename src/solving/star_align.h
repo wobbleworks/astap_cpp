@@ -120,17 +120,21 @@ struct IQuadCanvas {
 ///----------------------------------------
 
 ///----------------------------------------
-///      @brief Find stars in @p img (hfd > hfd_min, snr > 10) and append their
-///             (x, y) positions to @p starlist1 as a 2xN StarList.
+///      @brief Find stars in @p img (hfd_min < hfd ≤ hfd_max, snr > 10) and
+///             append their (x, y) positions to @p starlist1 as a 2xN StarList.
 ///    @details If more than @p max_stars are found, the brightest @p max_stars
-///             are kept.
+///             are kept. @p hfd_max defaults to 10 (the Pascal original's
+///             hardcoded ceiling); raise it for wide-bloom targets such as
+///             DSS2 photographic plates.
 ///      @param img Source image buffer.
 ///      @param hfd_min Minimum half-flux diameter for a detection to be kept.
+///      @param hfd_max Maximum half-flux diameter for a detection to be kept.
 ///      @param max_stars Maximum number of stars retained.
 /// @param[out] starlist1 Output star list (2xN).
 ///----------------------------------------
 
-void find_stars(const ImageArray& img, double hfd_min, int max_stars,
+void find_stars(const ImageArray& img, double hfd_min, double hfd_max,
+                int max_stars,
                 const Background& bck, StarList& starlist1);
 
 ///----------------------------------------

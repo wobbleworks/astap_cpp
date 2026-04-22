@@ -103,6 +103,9 @@
     <addaction name="actionSolve"/>
     <addaction name="actionShowSolverLog"/>
     <addaction name="separator"/>
+    <addaction name="actionPhotometry"/>
+    <addaction name="actionSqm"/>
+    <addaction name="separator"/>
     <addaction name="actionStack"/>
     <addaction name="actionLiveStack"/>
    </widget>
@@ -278,6 +281,16 @@
   <action name="actionAbout">
    <property name="text">
     <string>&amp;About ASTAP...</string>
+   </property>
+  </action>
+  <action name="actionPhotometry">
+   <property name="text">
+    <string>&amp;Photometric Calibration…</string>
+   </property>
+  </action>
+  <action name="actionSqm">
+   <property name="text">
+    <string>S&amp;ky Quality Meter…</string>
    </property>
   </action>
  </widget>

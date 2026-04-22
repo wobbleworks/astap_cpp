@@ -19,6 +19,7 @@
 #include "../core/demosaic.h"
 #include "../core/fits.h"
 #include "../core/globals.h"
+#include "../core/imaging.h"
 #include "../core/photometry.h"
 #include "../core/util.h"
 #include "../core/wcs.h"
@@ -561,9 +562,14 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                     referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
                 } else {
                     binning = report_binning(head.height);
-                    bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                    bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
                     find_quads(starlist1, quad_star_distances1);
+                    memo2_message("Reference: "
+                        + std::to_string(starlist1.empty() ? 0 : starlist1[0].size())
+                        + " stars, "
+                        + std::to_string(quad_star_distances1.empty() ? 0 : quad_star_distances1[0].size())
+                        + " quads.");
                 }
             }
             
@@ -585,9 +591,14 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                     } else if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
-                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist2, warning);
                         find_quads(starlist2, quad_star_distances2);
+                        memo2_message("Target: "
+                            + std::to_string(starlist2.empty() ? 0 : starlist2[0].size())
+                            + " stars, "
+                            + std::to_string(quad_star_distances2.empty() ? 0 : quad_star_distances2[0].size())
+                            + " quads.");
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                          + std::to_string(nr_references2)
@@ -891,9 +902,14 @@ void stack_average(int process_as_osc,
                     referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
                     referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
                 } else if (!use_astrometry_internal) {
-                    bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                    bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
                     find_quads(starlist1, quad_star_distances1);
+                    memo2_message("Reference: "
+                        + std::to_string(starlist1.empty() ? 0 : starlist1[0].size())
+                        + " stars, "
+                        + std::to_string(quad_star_distances1.empty() ? 0 : quad_star_distances1[0].size())
+                        + " quads.");
                     pedestal_s = bck.backgr;
                     if (pedestal_s < 500.0) {
                         pedestal_s = 500.0;
@@ -917,7 +933,7 @@ void stack_average(int process_as_osc,
                     } else if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
-                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist2, warning);
                         background_correction = pedestal_s - bck.backgr;
                         head.datamax_org += background_correction;
@@ -926,6 +942,11 @@ void stack_average(int process_as_osc,
                         }
                         head.pedestal = background_correction;
                         find_quads(starlist2, quad_star_distances2);
+                        memo2_message("Target: "
+                            + std::to_string(starlist2.empty() ? 0 : starlist2[0].size())
+                            + " stars, "
+                            + std::to_string(quad_star_distances2.empty() ? 0 : quad_star_distances2[0].size())
+                            + " quads.");
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                           + std::to_string(nr_references2)
@@ -1529,7 +1550,7 @@ void stack_sigmaclip(int process_as_osc,
                         referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
                         referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
                     } else {
-                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist1, warning);
                         find_quads(starlist1, quad_star_distances1);
                     }
@@ -1551,7 +1572,7 @@ void stack_sigmaclip(int process_as_osc,
                     if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
-                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist2, warning);
                         find_quads(starlist2, quad_star_distances2);
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
@@ -2372,7 +2393,7 @@ void calibration_and_alignment(int process_as_osc,
                     referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
                     referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
                 } else {
-                    bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                    bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
                     find_quads(starlist1, quad_star_distances1);
                     pedestal_s = bck.backgr;
@@ -2417,7 +2438,7 @@ void calibration_and_alignment(int process_as_osc,
                     if (use_manual_align || use_ephemeris_alignment) {
                         calculate_manual_vector(files_to_process, c);
                     } else {
-                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, max_stars,
+                        bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist2, warning);
                         background_correction = pedestal_s - bck.backgr;
                         head.datamax_org += background_correction;

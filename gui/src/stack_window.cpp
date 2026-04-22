@@ -43,6 +43,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <vector>
 
 ///----------------------------------------
@@ -130,6 +131,11 @@ StackWindow::StackWindow(QWidget* parent) :
 	buildCalibrationTab();
 	buildSettingsTab();
 
+	_phaseLabel = new QLabel(this);
+	_phaseLabel->setStyleSheet("color: gray;");
+	_phaseLabel->setVisible(false);
+	root->addWidget(_phaseLabel);
+
 	_progress = new QProgressBar(this);
 	_progress->setRange(0, 100);
 	_progress->setValue(0);
@@ -188,6 +194,7 @@ void StackWindow::buildLightsTab() {
 	_fileTable->horizontalHeader()->setSectionResizeMode(
 		1, QHeaderView::ResizeToContents);
 	_fileTable->verticalHeader()->setVisible(false);
+	_fileTable->setWordWrap(false);
 	_fileTable->setSelectionBehavior(QAbstractItemView::SelectRows);
 	_fileTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
 	_fileTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -324,10 +331,11 @@ void StackWindow::addFiles() {
 	settings.setValue("files/lastStackDir",
 		QFileInfo(paths.first()).absolutePath());
 
-	// Find already-present paths to skip duplicates.
+	// Find already-present paths to skip duplicates. The full path is stashed
+	// in Qt::UserRole so the visible cell text can be a short basename.
 	auto existing = QSet<QString>{};
 	for (int r = 0; r < _fileTable->rowCount(); ++r) {
-		existing.insert(_fileTable->item(r, 0)->text());
+		existing.insert(_fileTable->item(r, 0)->data(Qt::UserRole).toString());
 	}
 
 	const auto labels = channelLabels();
@@ -337,7 +345,8 @@ void StackWindow::addFiles() {
 		}
 		const auto row = _fileTable->rowCount();
 		_fileTable->insertRow(row);
-		auto* pathItem = new QTableWidgetItem(p);
+		auto* pathItem = new QTableWidgetItem(QFileInfo(p).fileName());
+		pathItem->setData(Qt::UserRole, p);
 		pathItem->setToolTip(p);
 		_fileTable->setItem(row, 0, pathItem);
 
@@ -430,6 +439,64 @@ void StackWindow::clearMasterFlat() {
 	QSettings().remove("calibration/masterFlat");
 }
 
+namespace {
+
+struct Row { QString path; int channel; long long area; };
+
+/// @brief Return the friendly name for a channel enum value.
+[[nodiscard]] const char* channel_name(int c) {
+	switch (c) {
+		case kChanL:   return "L";
+		case kChanR:   return "R";
+		case kChanG:   return "G";
+		case kChanB:   return "B";
+		case kChanRGB: return "RGB";
+		default:       return "?";
+	}
+}
+
+/// @brief Run a plain Average stack on the supplied rows and save the result
+///        to @p outPath as FITS.
+/// @details Uses stack_average on a file list built from @p files, largest-
+///          area first (so the engine's reference frame matches the canonical
+///          behaviour). Returns the number of frames combined on success, or
+///          0 if fewer than 2 frames could be stacked.
+[[nodiscard]] int run_average_to_fits(const std::vector<Row>& files,
+                                       const QString& outPath,
+                                       int osc) {
+	// Largest first so stack_average's internal ref picks the biggest frame.
+	auto ordered = files;
+	std::stable_sort(ordered.begin(), ordered.end(),
+		[](const Row& a, const Row& b) { return a.area > b.area; });
+
+	auto todo = std::vector<astap::FileToDo>{};
+	todo.reserve(ordered.size());
+	for (int i = 0; i < static_cast<int>(ordered.size()); ++i) {
+		todo.push_back({ordered[i].path.toStdString(), i});
+	}
+
+	auto counter = 0;
+	astap::stacking::stack_average(osc, std::span<astap::FileToDo>(todo), counter);
+
+	if (counter < 2 || astap::img_loaded.empty()) {
+		return 0;
+	}
+
+	// Write the pre-stacked master to the temp FITS. memo1_lines already
+	// carries a valid header (copied from the reference frame during the
+	// stack), so save_fits can drop it in as-is.
+	auto memo = astap::memo1_lines;
+	const auto ok = astap::core::save_fits(
+		astap::img_loaded,
+		memo,
+		std::filesystem::path(outPath.toStdString()),
+		/*type1=*/-32,   // float-32, preserves the combined pedestal+noise floor
+		/*override2=*/true);
+	return ok ? counter : 0;
+}
+
+}  // namespace
+
 void StackWindow::startStack() {
 	const auto count = _fileTable->rowCount();
 	if (count < 1) {
@@ -442,15 +509,13 @@ void StackWindow::startStack() {
 
 	_stackButton->setEnabled(false);
 	_progress->setValue(0);
+	_phaseLabel->setVisible(false);
 
-	// Gather (path, channel) rows from the table. Pre-probe FITS headers
-	// for pixel dimensions so we can pick the largest frame as the stacking
-	// reference — the engine upsamples smaller frames to match it.
-	struct Row { QString path; int channel; long long area; };
+	// Gather (path, channel, area) rows from the table.
 	auto rows = std::vector<Row>{};
 	rows.reserve(count);
 	for (int i = 0; i < count; ++i) {
-		const auto path = _fileTable->item(i, 0)->text();
+		const auto path = _fileTable->item(i, 0)->data(Qt::UserRole).toString();
 		auto* combo = qobject_cast<QComboBox*>(
 			_fileTable->cellWidget(i, 1));
 		const auto chan = combo ? combo->currentIndex() : kChanLight;
@@ -466,49 +531,123 @@ void StackWindow::startStack() {
 		qDebug().noquote() << "[stack]" << QString::fromStdString(msg);
 	});
 
+	// Centralised cleanup: run on every exit path so progress sinks don't
+	// leak into later runs.
+	auto tear_down = [this]() {
+		astap::stacking::set_progress_sink(nullptr);
+		astap::stacking::set_memo2_sink(nullptr);
+		_stackButton->setEnabled(true);
+		_phaseLabel->setVisible(false);
+	};
+
 	auto counter = 0;
 	const auto method = _methodCombo->currentData().toInt();
 	const auto osc = 0;  // TODO: OSC/Bayer toggle
 
 	if (method == kMethodLRGB) {
-		// Assemble the 6-slot LRGB span: ref, R, G, B, RGB, L.
-		// R, G, B are required. L and RGB are optional (engine skips empty
-		// slots).
-		auto firstOf = [&](Channel c) -> QString {
-			for (const auto& r : rows) {
-				if (r.channel == c) return r.path;
+		// Group rows by channel. Skip untagged ("Light") rows in LRGB mode —
+		// those files aren't meant for the combine.
+		auto byChannel = std::map<int, std::vector<Row>>{};
+		for (const auto& r : rows) {
+			if (r.channel != kChanLight) {
+				byChannel[r.channel].push_back(r);
 			}
-			return {};
-		};
-		const auto lPath = firstOf(kChanL);
-		const auto rPath = firstOf(kChanR);
-		const auto gPath = firstOf(kChanG);
-		const auto bPath = firstOf(kChanB);
-		const auto rgbPath = firstOf(kChanRGB);
+		}
 
 		auto missing = QStringList{};
-		if (rPath.isEmpty()) missing << "R";
-		if (gPath.isEmpty()) missing << "G";
-		if (bPath.isEmpty()) missing << "B";
+		if (!byChannel.count(kChanR)) missing << "R";
+		if (!byChannel.count(kChanG)) missing << "G";
+		if (!byChannel.count(kChanB)) missing << "B";
 		if (!missing.isEmpty()) {
 			QMessageBox::warning(this, tr("LRGB"),
 				tr("LRGB combine needs at least one file tagged for each of "
 				   "R, G, B. Missing: %1.").arg(missing.join(", ")));
-			astap::stacking::set_progress_sink(nullptr);
-			astap::stacking::set_memo2_sink(nullptr);
-			_stackButton->setEnabled(true);
+			tear_down();
 			return;
 		}
 
-		// Engine expects [ref, R, G, B, RGB, L]. Pick the ref as the
-		// largest-dim tagged file so the engine upsamples smaller channels
-		// to match. Falls back to L when present at equal size.
-		auto areaOf = [&](const QString& p) -> long long {
-			for (const auto& r : rows) {
-				if (r.path == p) return r.area;
+		// Count channels that need pre-stacking so the phase label is
+		// meaningful. One phase per multi-file channel, plus one for the
+		// final combine.
+		auto autoChainPhases = 0;
+		for (const auto& [ch, files] : byChannel) {
+			if (files.size() > 1) {
+				++autoChainPhases;
 			}
-			return 0;
+		}
+
+		// Resolve each channel to a single file path — either the lone tagged
+		// file, or a pre-stacked master written to the temp dir.
+		if (autoChainPhases > 0 && !_tempDir) {
+			_tempDir = std::make_unique<QTemporaryDir>();
+			if (!_tempDir->isValid()) {
+				QMessageBox::warning(this, tr("LRGB"),
+					tr("Could not create a temporary directory for channel "
+					   "masters: %1").arg(_tempDir->errorString()));
+				tear_down();
+				return;
+			}
+		}
+
+		auto channelMaster = std::map<int, QString>{};
+		auto currentPhase = 0;
+		for (const auto& [ch, files] : byChannel) {
+			if (files.size() == 1) {
+				channelMaster[ch] = files[0].path;
+				continue;
+			}
+
+			++currentPhase;
+			_phaseLabel->setVisible(true);
+			_phaseLabel->setText(
+				tr("Stacking channel %1 (%2 of %3) — %4 frames")
+					.arg(channel_name(ch))
+					.arg(currentPhase)
+					.arg(autoChainPhases + 1)        // +1 for the final combine
+					.arg(files.size()));
+			_progress->setValue(0);
+			QCoreApplication::processEvents();
+
+			const auto masterPath =
+				_tempDir->filePath(QString("master_%1.fits").arg(channel_name(ch)));
+
+			const auto n = run_average_to_fits(files, masterPath, osc);
+			if (n == 0) {
+				QMessageBox::warning(this, tr("LRGB auto-chain"),
+					tr("Could not pre-stack the %1 channel (%2 frames).")
+						.arg(channel_name(ch))
+						.arg(files.size()));
+				tear_down();
+				return;
+			}
+			channelMaster[ch] = masterPath;
+		}
+
+		// Final phase: LRGB combine. Re-probe the master paths for area so the
+		// reference-picking logic handles cross-channel size differences.
+		if (autoChainPhases > 0) {
+			_phaseLabel->setText(
+				tr("Combining LRGB (%1 of %1)").arg(autoChainPhases + 1));
+			_progress->setValue(0);
+			QCoreApplication::processEvents();
+		}
+
+		auto pathFor = [&](int ch) -> QString {
+			auto it = channelMaster.find(ch);
+			return (it != channelMaster.end()) ? it->second : QString{};
 		};
+
+		const auto lPath   = pathFor(kChanL);
+		const auto rPath   = pathFor(kChanR);
+		const auto gPath   = pathFor(kChanG);
+		const auto bPath   = pathFor(kChanB);
+		const auto rgbPath = pathFor(kChanRGB);
+
+		auto areaOf = [&](const QString& p) -> long long {
+			if (p.isEmpty()) return 0;
+			return probe_area(p);
+		};
+
 		auto refPath = !lPath.isEmpty() ? lPath : rPath;
 		auto refArea = areaOf(refPath);
 		for (const auto* p : {&rPath, &gPath, &bPath, &lPath}) {
@@ -517,13 +656,14 @@ void StackWindow::startStack() {
 				refArea = areaOf(*p);
 			}
 		}
+
 		auto files = std::vector<astap::FileToDo>{};
 		files.push_back({refPath.toStdString(), 0});
 		files.push_back({rPath.toStdString(), 0});
 		files.push_back({gPath.toStdString(), 0});
 		files.push_back({bPath.toStdString(), 0});
-		files.push_back({rgbPath.toStdString(), 0});  // may be empty — engine skips
-		files.push_back({lPath.toStdString(), 0});    // may be empty — engine skips
+		files.push_back({rgbPath.toStdString(), 0});  // may be empty
+		files.push_back({lPath.toStdString(), 0});    // may be empty
 
 		astap::stacking::stack_LRGB(std::span<astap::FileToDo>(files), counter);
 	} else {
@@ -554,6 +694,7 @@ void StackWindow::startStack() {
 				.arg(counter).arg(count));
 		_progress->setValue(0);
 		_stackButton->setEnabled(true);
+		_phaseLabel->setVisible(false);
 		return;
 	}
 
@@ -566,6 +707,7 @@ void StackWindow::startStack() {
 
 	_progress->setValue(100);
 	_stackButton->setEnabled(true);
+	_phaseLabel->setVisible(false);
 
 	emit stackCompleted(counter);
 }

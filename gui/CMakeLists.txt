@@ -78,6 +78,10 @@ set(GUI_SOURCES
 	src/annotation_scanner.h
 	src/stack_window.cpp
 	src/stack_window.h
+	src/photometry_dialog.cpp
+	src/photometry_dialog.h
+	src/sqm_dialog.cpp
+	src/sqm_dialog.h
 	src/qt_image_decoder.cpp
 	src/qt_image_decoder.h
 )

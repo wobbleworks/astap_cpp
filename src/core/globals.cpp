@@ -135,12 +135,14 @@ bool   use_ephemeris_alignment  = false;
 bool   use_astrometry_internal  = false;
 bool   skip_alignment           = false;
 double hfd_min_setting          = 0.0;    // 0 = auto (engine defaults to 0.8)
+double hfd_max_setting          = 10.0;   // Matches Pascal. Real stars fit well inside; extended sources (galaxies) are correctly excluded.
 double sigma_clip_factor        = 2.0;
 
 /// MARK: Memos
 
 std::vector<std::string> memo1_lines;
 std::vector<std::string> memo2_lines;
+
 
 /// MARK: Filesystem / executable environment
 

@@ -51,6 +51,11 @@ struct HfdScratch {
     double star_bg{0.0};
     double sd_bg{0.0};
     int    r_aperture{-1};
+    /// @brief Count of pixels > 3σ above local background inside the
+    ///        centroid-refinement box. Exposed so callers can reject
+    ///        extended sources (galaxies / nebulae) whose fill fraction is
+    ///        much higher than a point source's.
+    int    signal_counter{0};
 };
 
 /// MARK: - Core Measurement

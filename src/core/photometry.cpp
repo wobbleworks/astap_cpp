@@ -169,6 +169,7 @@ void HFD(const ImageArray& img,
                 }
             }
             
+            scratch.signal_counter = signal_counter;
             if (SumVal <= 12 * sd_bg) {
                 scratch.star_bg = star_bg;
                 scratch.sd_bg = sd_bg;
@@ -257,7 +258,7 @@ void HFD(const ImageArray& img,
             result.yc = yc;
             return;
         }
-        
+
         if ((r_aperture > 2) &&
             (illuminated_pixels < 0.35 * (r_aperture + r_aperture - 2) *
                                           (r_aperture + r_aperture - 2))) {

@@ -41,11 +41,13 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/src/"
 option(ASTAP_BUILD_CLI "Build the astap command-line binary" ON)
 
 if(ASTAP_BUILD_CLI)
-	file(GLOB CLI_SOURCES CONFIGURE_DEPENDS
-		"${CMAKE_CURRENT_SOURCE_DIR}/cli/*.cpp"
+	# `astap` = main CLI; exclude dev-only harness files like detect_stars.cpp.
+	set(CLI_MAIN_SOURCES
+		"${CMAKE_CURRENT_SOURCE_DIR}/cli/main.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/cli/stb_image_decoder.cpp"
 	)
 
-	add_executable(astap ${CLI_SOURCES})
+	add_executable(astap ${CLI_MAIN_SOURCES})
 	target_link_libraries(astap PRIVATE astap_lib)
 	target_include_directories(astap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
 
@@ -53,6 +55,13 @@ if(ASTAP_BUILD_CLI)
 	if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../stb")
 		target_include_directories(astap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../stb")
 	endif()
+
+	# Dev-only detection harness — runs find_stars on a single FITS and
+	# dumps each detection. Not shipped.
+	add_executable(detect_stars
+		"${CMAKE_CURRENT_SOURCE_DIR}/cli/detect_stars.cpp"
+	)
+	target_link_libraries(detect_stars PRIVATE astap_lib)
 endif()
 
 # ---- GUI executable (optional, Qt 6 desktop) --------------------------------

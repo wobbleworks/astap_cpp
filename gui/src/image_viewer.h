@@ -122,6 +122,10 @@ public:
 
 	/// @brief Re-apply the auto-stretch heuristic and emit @c stretchChanged.
 	void autoStretch();
+
+	/// @brief Current stretched / flipped 8-bit render, suitable for JPG/PNG-8 export.
+	/// @details Empty when no image is loaded. Mirrors exactly what the viewer paints.
+	[[nodiscard]] const QImage& renderedImage() const noexcept { return _rendered; }
 	///@}
 
 	/// @name Zoom controls

@@ -14,7 +14,10 @@
 
 #include "../../src/types.h"
 
+#include <QTemporaryDir>
 #include <QWidget>
+
+#include <memory>
 
 class QComboBox;
 class QDoubleSpinBox;
@@ -96,8 +99,13 @@ private:
 	// Footer
 	QPushButton* _stackButton = nullptr;
 	QProgressBar* _progress = nullptr;
+	QLabel* _phaseLabel = nullptr;   ///< Current phase for multi-phase runs.
 
 	ImageViewer* _viewer = nullptr;
+
+	/// Temp dir for LRGB auto-chain's intermediate channel masters. Lazy
+	/// initialised on first use; cleaned up when the window is destroyed.
+	std::unique_ptr<QTemporaryDir> _tempDir;
 };
 
 } // namespace astap::gui
