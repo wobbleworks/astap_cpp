@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -1332,7 +1333,8 @@ void analyse_image(const ImageArray& img,
                                         xc + 1.0, yc + 1.0, hfd1,
                                         static_cast<int>(std::round(snr)),
                                         static_cast<int>(std::round(flux)),
-                                        ra * 180.0 / M_PI, decl * 180.0 / M_PI);
+                                        ra  * 180.0 / std::numbers::pi,
+                                        decl * 180.0 / std::numbers::pi);
                                 }
                                 startext += buf;
                             }

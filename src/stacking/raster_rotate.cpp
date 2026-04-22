@@ -18,12 +18,21 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <numbers>
 #include <utility>
 #include <vector>
 
 ///----------------------------------------
 namespace astap::stacking {
 ///----------------------------------------
+
+// MSVC does not define the POSIX `M_PI` macro. Make sure the symbol below
+// always resolves to std::numbers::pi regardless of whether <cmath> chose
+// to expose the POSIX extension (libc++/libstdc++ do, MSVC does not).
+#ifdef M_PI
+#  undef M_PI
+#endif
+namespace { constexpr auto M_PI = std::numbers::pi; }
 
 ///----------------------------------------
 /// MARK: File-local types and state

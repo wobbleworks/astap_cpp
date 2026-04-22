@@ -21,6 +21,15 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+  #include <io.h>
+  // MSVC's C runtime names these with a leading underscore.
+  #define popen  _popen
+  #define pclose _pclose
+#else
+  #include <sys/wait.h>
+#endif
+
 namespace fs = std::filesystem;
 
 ///----------------------------------------
