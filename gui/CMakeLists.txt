@@ -47,7 +47,7 @@ if(NOT DEFINED Qt6_DIR AND NOT DEFINED CMAKE_PREFIX_PATH)
 	endforeach()
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
 
 qt_standard_project_setup()
 

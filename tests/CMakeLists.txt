@@ -24,11 +24,17 @@ enable_testing()
 # Expect a sibling `doctest` directory next to this repo:
 #   <parent>/astap_cpp/
 #   <parent>/doctest/doctest/doctest.h
-set(ASTAP_DOCTEST_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/../../doctest")
+# Default: sibling `doctest` directory alongside the repo root.
+# CI (and anyone with doctest elsewhere) can override via
+# `-DASTAP_DOCTEST_HEADERS=/path/to/doctest`.
+if(NOT DEFINED ASTAP_DOCTEST_HEADERS OR ASTAP_DOCTEST_HEADERS STREQUAL "")
+	set(ASTAP_DOCTEST_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/../../doctest")
+endif()
 set(ASTAP_SRC             "${CMAKE_CURRENT_SOURCE_DIR}/../src")
 
 if(NOT EXISTS "${ASTAP_DOCTEST_HEADERS}/doctest/doctest.h")
-	message(FATAL_ERROR "doctest header not found at ${ASTAP_DOCTEST_HEADERS}/doctest/doctest.h")
+	message(FATAL_ERROR "doctest header not found at ${ASTAP_DOCTEST_HEADERS}/doctest/doctest.h "
+		"(override with -DASTAP_DOCTEST_HEADERS=<path>)")
 endif()
 
 # ---- Helpers ----------------------------------------------------------------

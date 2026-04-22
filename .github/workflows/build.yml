@@ -1,0 +1,139 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux (Ubuntu 24.04): GCC 13 is default, qt6-base-dev is in main apt.
+  # Builds the library + CLI + tests + Qt GUI, runs ctest.
+  # ---------------------------------------------------------------------------
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ASTAP++
+
+      - name: Checkout doctest
+        uses: actions/checkout@v4
+        with:
+          repository: doctest/doctest
+          ref: v2.4.12
+          path: doctest
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build \
+            libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb1
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.1
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure (library + CLI + GUI)
+        working-directory: ASTAP++
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DASTAP_BUILD_CLI=ON
+          -DASTAP_BUILD_GUI=ON
+
+      - name: Build
+        working-directory: ASTAP++
+        run: cmake --build build --parallel
+
+      - name: Configure tests
+        working-directory: ASTAP++
+        run: >
+          cmake -S tests -B tests/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DASTAP_DOCTEST_HEADERS=${{ github.workspace }}/doctest
+
+      - name: Build tests
+        working-directory: ASTAP++
+        run: cmake --build tests/build --parallel
+
+      - name: Run tests
+        working-directory: ASTAP++
+        run: ctest --test-dir tests/build --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Windows (windows-2022): MSVC 19.37+, Qt from aqtinstall action.
+  # Builds the library + CLI + tests, runs ctest. GUI also built when Qt is
+  # available.
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ASTAP++
+
+      - name: Checkout doctest
+        uses: actions/checkout@v4
+        with:
+          repository: doctest/doctest
+          ref: v2.4.12
+          path: doctest
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.1
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Set up MSVC developer shell
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure (library + CLI + GUI)
+        working-directory: ASTAP++
+        shell: cmd
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DASTAP_BUILD_CLI=ON
+          -DASTAP_BUILD_GUI=ON
+
+      - name: Build
+        working-directory: ASTAP++
+        shell: cmd
+        run: cmake --build build --parallel
+
+      - name: Configure tests
+        working-directory: ASTAP++
+        shell: cmd
+        run: >
+          cmake -S tests -B tests/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DASTAP_DOCTEST_HEADERS=${{ github.workspace }}/doctest
+
+      - name: Build tests
+        working-directory: ASTAP++
+        shell: cmd
+        run: cmake --build tests/build --parallel
+
+      - name: Run tests
+        working-directory: ASTAP++
+        shell: cmd
+        run: ctest --test-dir tests/build --output-on-failure
