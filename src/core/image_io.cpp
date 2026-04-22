@@ -27,7 +27,10 @@
 #include <system_error>
 #include <vector>
 
+#include "fits.h"           // load_fits, save_fits, unpack_cfitsio, update_*
 #include "globals.h"
+#include "platform.h"       // execute_and_wait
+#include "util.h"           // extract_*_from_filename, check_raw_file_extension
 #include "../image/tiff.h"
 #include "../image/xisf.h"
 
@@ -95,64 +98,20 @@ void set_image_decoder(std::shared_ptr<IImageDecoder> impl) {
 }
 
 // ---------------------------------------------------------------------------
-// Forward declarations of helpers that live in sister translation units.
-// These are populated as the surrounding modules are ported; until then the
-// stubs in their respective .cpp files keep the link viable.
+// Forward declarations for helpers without a ported header. Canonical
+// declarations for load_fits / save_fits / unpack_cfitsio / update_integer /
+// update_float / update_text / add_text / add_long_comment /
+// read_keys_memo / reset_fits_global_variables come in via "fits.h";
+// extract_*_from_filename and check_raw_file_extension come from "util.h";
+// execute_and_wait from "platform.h". Using the real headers eliminates a
+// class of type-mismatch bugs that silently resolved via permissive name
+// mangling on Clang/GCC but failed to link on MSVC (which bakes return +
+// parameter types into the mangled name).
 // ---------------------------------------------------------------------------
-
-// FITS I/O (fits.h, being ported in parallel).
-bool load_fits(const std::filesystem::path& filename,
-               bool                         light,
-               bool                         load_data,
-               bool                         update_memo,
-               int                          hdu_index,
-               std::vector<std::string>&    memo,
-               Header&                      head,
-               ImageArray&                  img);
-               
-bool save_fits(const ImageArray&               img,
-               const std::vector<std::string>& memo,
-               const std::filesystem::path&    filename,
-               int                             nrbits,
-               bool                            overwrite);
-               
-// .fz CFITSIO unpack — wraps `funpack` shell-out. Lives in fits.cpp.
-bool unpack_cfitsio(std::string& filename);
-
-// Extension-classification helpers (util.h).
-bool check_raw_file_extension(std::string_view ext);
-
-// Header-text helpers (header_utils.h, also being ported).
-void reset_fits_global_variables(bool light, Header& head);
-void update_integer(std::vector<std::string>& memo,
-                    std::string_view          key,
-                    std::string_view          comment,
-                    long long                 value);
-void update_float(std::vector<std::string>& memo,
-                  std::string_view          key,
-                  std::string_view          comment,
-                  bool                      exponent,
-                  double                    value);
-void update_text(std::vector<std::string>& memo,
-                 std::string_view          key,
-                 std::string_view          value);
-void add_text(std::vector<std::string>& memo,
-              std::string_view          key,
-              std::string_view          value);
-void add_long_comment(std::vector<std::string>& memo, std::string_view text);
-void read_keys_memo(bool light, Header& head, std::vector<std::string>& memo);
-
-// Filename heuristics — used to back-fill metadata when the file lacks it.
-double      extract_exposure_from_filename(std::string_view filename);
-int         extract_temperature_from_filename(std::string_view filename);
-std::string extract_objectname_from_filename(std::string_view filename);
 
 // Calendar conversion. JD -> "YYYY-MM-DDThh:mm:ss".
 std::string jd_to_date(double jd);
 double      file_age_jd(const std::filesystem::path& path);
-
-// Platform (platform.cpp). Show-console is the "show window" flag.
-bool execute_and_wait(const std::string& cmd, bool show_console);
 
 // Recent-file menu refresh (GUI layer). No-op in headless builds.
 void update_recent_file_menu();
@@ -223,13 +182,8 @@ inline std::uint16_t swap16(std::uint16_t v) {
     return static_cast<std::uint16_t>((v << 8) | (v >> 8));
 }
 
-// Tolerant float parser that accepts either '.' or ',' as decimal separator.
-inline double strtofloat2(std::string_view s) {
-    std::string copy(s);
-    for (char& c : copy) if (c == ',') c = '.';
-    int err = 0;
-    return val_double(copy, err);
-}
+// `strtofloat2` lives in core/util.h. Its canonical implementation is in
+// core/util.cpp.
 
 // Convert a unix timestamp (seconds since 1970-01-01) to JD.
 inline double unix_to_jd(long long secs) {
@@ -854,7 +808,9 @@ bool convert_to_fits(std::string& filen) {
     if (check_raw_file_extension(ext)) {
         result = convert_raw(false, true, filen, head, img_loaded);
     } else if (ext == ".FZ") {
-        result = unpack_cfitsio(filen);
+        auto p = std::filesystem::path{filen};
+        result = unpack_cfitsio(p);
+        filen = p.string();
     } else {
         if (ext == ".PPM" || ext == ".PGM" || ext == ".PFM" || ext == ".PBM") {
             result = load_ppm_pgm_pfm(filen, headX, img_temp, *memox);
@@ -901,7 +857,9 @@ bool load_image(std::string&                 filename2,
         result = load_fits(filename2, true, true, true, 0, memo, head, img);
         if (head.naxis < 2) result = false;
     } else if (ext1 == ".FZ") {
-        if (unpack_cfitsio(filename2)) {
+        auto p = std::filesystem::path{filename2};
+        if (unpack_cfitsio(p)) {
+            filename2 = p.string();
             result = load_fits(filename2, true, true, true, 0, memo, head, img);
         }
     } else if (check_raw_file_extension(ext1)) {

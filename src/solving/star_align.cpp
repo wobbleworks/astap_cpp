@@ -662,15 +662,21 @@ void find_triples_using_quads(StarList& starlist, StarList& quad_star_distances)
 }
 
 void find_quads_xy(const StarList& starlist, StarList& starlistquads) {
-    const auto nrstars_min_one = static_cast<int>(starlist[0].size()) - 1;
-    
+    const auto nrstars         = static_cast<int>(starlist[0].size());
+    const auto nrstars_min_one = nrstars - 1;
+
     if (nrstars_min_one < 3) {
         set_length_2d(starlistquads, 10, 0);
         return;
     }
-    
+
     auto nrquads = 0;
-    set_length_2d(starlistquads, 10, static_cast<std::size_t>(nrstars_min_one));
+    // Allocate nrstars (one per loop iteration). The Pascal original used
+    // nrstars-1, relying on real-world data always having at least one
+    // near-duplicate centroid to fall under the bound — but synthetic grids
+    // produce exactly nrstars distinct quads and overrun by one. The final
+    // resize_2d_preserve at the bottom trims to the actual count.
+    set_length_2d(starlistquads, 10, static_cast<std::size_t>(nrstars));
     
     auto j_distance1 = 0;
     auto j_distance2 = 0;
