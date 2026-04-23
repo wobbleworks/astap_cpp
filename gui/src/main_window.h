@@ -50,6 +50,7 @@ private slots:
 	void openFile();
 	void showAbout();
 	void solveImage();
+	void solveWithAstrometryNet();
 	void onSolveFinished();
 	void onCursorMoved(QPointF imagePos, bool inImage);
 	void showSolverLog();
@@ -87,6 +88,7 @@ private:
 	void ensureLogWindow();
 
 	std::unique_ptr<Ui::MainWindow> _ui;
+	class AstrometryNetDialog* _astrometryNetDialog = nullptr;
 	class LogWindow* _logWindow = nullptr;
 	class StackWindow* _stackWindow = nullptr;
 	class ImageInspectorDialog* _inspectorDialog = nullptr;

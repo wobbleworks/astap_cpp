@@ -107,6 +107,7 @@
     <addaction name="actionClearMarkers"/>
     <addaction name="separator"/>
     <addaction name="actionSolve"/>
+    <addaction name="actionSolveAstrometryNet"/>
     <addaction name="actionShowSolverLog"/>
     <addaction name="separator"/>
     <addaction name="actionPhotometry"/>
@@ -298,6 +299,11 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+S</string>
+   </property>
+  </action>
+  <action name="actionSolveAstrometryNet">
+   <property name="text">
+    <string>Solve with local astrometry.&amp;net…</string>
    </property>
   </action>
   <action name="actionShowSolverLog">

@@ -8,6 +8,7 @@
 
 #include "main_window.h"
 #include "annotation_scanner.h"
+#include "astrometry_net_dialog.h"
 #include "controls_panel.h"
 #include "image_viewer.h"
 #include "image_inspector_dialog.h"
@@ -115,6 +116,8 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionQuit, &QAction::triggered, this, &QWidget::close);
 	connect(_ui->actionAbout, &QAction::triggered, this, &MainWindow::showAbout);
 	connect(_ui->actionSolve, &QAction::triggered, this, &MainWindow::solveImage);
+	connect(_ui->actionSolveAstrometryNet, &QAction::triggered,
+		this, &MainWindow::solveWithAstrometryNet);
 	connect(_ui->actionShowSolverLog, &QAction::triggered, this, &MainWindow::showSolverLog);
 	connect(_ui->actionAnalyse, &QAction::triggered, this, &MainWindow::analyseStars);
 	connect(_ui->actionInspect, &QAction::triggered, this, &MainWindow::inspectImage);
@@ -411,6 +414,36 @@ void MainWindow::solveImage() {
 			astap::check_pattern_filter);
 	});
 	_solveWatcher->setFuture(future);
+}
+
+void MainWindow::solveWithAstrometryNet() {
+	if (!_ui->imageViewer->hasImage()) {
+		QMessageBox::information(this, tr("Solve with astrometry.net"),
+			tr("Open a FITS file first."));
+		return;
+	}
+	if (astap::filename2.empty()) {
+		QMessageBox::information(this, tr("Solve with astrometry.net"),
+			tr("The current image has no filename on disk "
+			   "(it may have come from a drag-dropped buffer). "
+			   "Save it first, then re-open it from disk."));
+		return;
+	}
+
+	if (!_astrometryNetDialog) {
+		_astrometryNetDialog = new AstrometryNetDialog(this);
+		connect(_astrometryNetDialog, &AstrometryNetDialog::solved,
+			this, [this](const QString& path) {
+				// Reload from disk — the FITS now carries solve-field's WCS.
+				loadImageAt(path);
+				statusBar()->showMessage(tr("Solved with astrometry.net"));
+			});
+	}
+	_astrometryNetDialog->setFitsPath(
+		QString::fromStdString(astap::filename2));
+	_astrometryNetDialog->show();
+	_astrometryNetDialog->raise();
+	_astrometryNetDialog->activateWindow();
 }
 
 void MainWindow::onSolveFinished() {

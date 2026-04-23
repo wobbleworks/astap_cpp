@@ -90,6 +90,8 @@ set(GUI_SOURCES
 	src/qt_image_decoder.h
 	src/qt_http_client.cpp
 	src/qt_http_client.h
+	src/astrometry_net_dialog.cpp
+	src/astrometry_net_dialog.h
 )
 
 # ---- Target -----------------------------------------------------------------
