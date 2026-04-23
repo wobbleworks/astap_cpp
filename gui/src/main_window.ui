@@ -101,6 +101,9 @@
     <addaction name="actionInspect"/>
     <addaction name="actionAnnotate"/>
     <addaction name="actionCatalogStars"/>
+    <addaction name="actionVariableStars"/>
+    <addaction name="actionSimbadObjects"/>
+    <addaction name="actionVizierGaia"/>
     <addaction name="actionClearMarkers"/>
     <addaction name="separator"/>
     <addaction name="actionSolve"/>
@@ -251,6 +254,21 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+D</string>
+   </property>
+  </action>
+  <action name="actionVariableStars">
+   <property name="text">
+    <string>&amp;Variable Stars (VSX/VSP)…</string>
+   </property>
+  </action>
+  <action name="actionSimbadObjects">
+   <property name="text">
+    <string>Sim&amp;bad Objects…</string>
+   </property>
+  </action>
+  <action name="actionVizierGaia">
+   <property name="text">
+    <string>Vi&amp;zier Gaia Catalog…</string>
    </property>
   </action>
   <action name="actionAnalyse">

@@ -135,6 +135,36 @@ void ImageViewer::clearCatalogStars() {
 	update();
 }
 
+void ImageViewer::setVarStars(std::vector<VarStarMarker> markers) {
+	_varStars = std::move(markers);
+	update();
+}
+
+void ImageViewer::clearVarStars() {
+	_varStars.clear();
+	update();
+}
+
+void ImageViewer::setSimbadObjects(std::vector<SimbadMarker> markers) {
+	_simbadObjects = std::move(markers);
+	update();
+}
+
+void ImageViewer::clearSimbadObjects() {
+	_simbadObjects.clear();
+	update();
+}
+
+void ImageViewer::setVizierStars(std::vector<VizierMarker> markers) {
+	_vizierStars = std::move(markers);
+	update();
+}
+
+void ImageViewer::clearVizierStars() {
+	_vizierStars.clear();
+	update();
+}
+
 void ImageViewer::clearConstellations() {
 	_constellations.lines.clear();
 	_constellations.labels.clear();
@@ -159,6 +189,13 @@ void ImageViewer::clear() {
 	_histogram.clear();
 	_stats.clear();
 	_stars.clear();
+	_annotations.clear();
+	_catalogStars.clear();
+	_varStars.clear();
+	_simbadObjects.clear();
+	_vizierStars.clear();
+	_constellations.lines.clear();
+	_constellations.labels.clear();
 	_sampleMin = _sampleMax = 0.0f;
 	_dataLo = 0.0f;
 	_dataHi = kFullRange;
@@ -444,6 +481,143 @@ void ImageViewer::paintEvent(QPaintEvent* event) {
 			if (effectiveZoom >= 0.5) {
 				painter.drawText(vp + QPointF(rPx + 3, -rPx - 2),
 					QString::number(s.magn, 'f', 1));
+			}
+		}
+	}
+
+	// AAVSO VSX (variables, gold) + VSP (comparison stars, cyan) overlay.
+	if ((!_varStars.empty()) && _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		QFont labelFont = painter.font();
+		labelFont.setPointSizeF(std::max(7.0, 8.5 * std::min(1.0, effectiveZoom)));
+		painter.setFont(labelFont);
+
+		const auto rPx = std::max(6.0, 9.0 * std::min(1.0, effectiveZoom));
+		const auto kVarColour  = QColor(255, 220, 80, 230);   // gold for variables
+		const auto kCompColour = QColor( 80, 220, 255, 230);  // cyan for comp stars
+
+		for (const auto& m : _varStars) {
+			const auto vp = toViewport(m.x, m.y);
+			const auto colour = m.isComparison ? kCompColour : kVarColour;
+			QPen pen(colour);
+			pen.setWidthF(1.2);
+			painter.setPen(pen);
+			painter.setBrush(Qt::NoBrush);
+			painter.drawEllipse(vp, rPx, rPx);
+
+			if (effectiveZoom >= 0.4) {
+				auto label = m.name;
+				if (!m.magText.isEmpty()) {
+					label += QStringLiteral("  ") + m.magText;
+				}
+				painter.drawText(vp + QPointF(rPx + 3, -rPx - 2), label);
+			}
+		}
+	}
+
+	// Simbad object overlay: square markers coloured by maintype.
+	if ((!_simbadObjects.empty()) && _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		// Rough type → colour mapping. Falls through to a neutral magenta for
+		// any maintype we don't recognise.
+		auto colourForType = [](const QString& t) -> QColor {
+			if (t.startsWith(QStringLiteral("G"), Qt::CaseInsensitive))
+				return QColor(120, 255, 160, 230);  // galaxies — green
+			if (t.startsWith(QStringLiteral("OpC"), Qt::CaseInsensitive)
+			 || t.startsWith(QStringLiteral("Cl*"), Qt::CaseInsensitive)
+			 || t.startsWith(QStringLiteral("OCl"), Qt::CaseInsensitive))
+				return QColor(255, 200, 100, 230);  // open clusters — amber
+			if (t.startsWith(QStringLiteral("GlC"), Qt::CaseInsensitive))
+				return QColor(255, 240, 100, 230);  // globular — yellow
+			if (t.startsWith(QStringLiteral("PN"), Qt::CaseInsensitive)
+			 || t.startsWith(QStringLiteral("Neb"), Qt::CaseInsensitive)
+			 || t.startsWith(QStringLiteral("HII"), Qt::CaseInsensitive))
+				return QColor(180, 130, 255, 230);  // nebulae — purple
+			if (t == QStringLiteral("*") || t.startsWith(QStringLiteral("V*"))
+			 || t.startsWith(QStringLiteral("**")))
+				return QColor(220, 220, 220, 230);  // stars — white
+			return QColor(255, 120, 200, 220);      // unknown — magenta
+		};
+
+		QFont labelFont = painter.font();
+		labelFont.setPointSizeF(std::max(7.0, 8.0 * std::min(1.0, effectiveZoom)));
+		painter.setFont(labelFont);
+
+		const auto basePx = std::max(7.0, 9.0 * std::min(1.0, effectiveZoom));
+
+		for (const auto& m : _simbadObjects) {
+			const auto vp = toViewport(m.x, m.y);
+			QPen pen(colourForType(m.type));
+			pen.setWidthF(1.0);
+			painter.setPen(pen);
+			painter.setBrush(Qt::NoBrush);
+			painter.drawRect(QRectF(vp.x() - basePx, vp.y() - basePx,
+			                        basePx * 2, basePx * 2));
+
+			if (effectiveZoom >= 0.5) {
+				painter.drawText(vp + QPointF(basePx + 3, -basePx - 2),
+					m.name + QStringLiteral(" [") + m.type + QStringLiteral("]"));
+			}
+		}
+	}
+
+	// Vizier (Gaia) star overlay: pink circles, mag-sized.
+	if ((!_vizierStars.empty()) && _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		QFont labelFont = painter.font();
+		labelFont.setPointSizeF(std::max(7.0, 8.0 * std::min(1.0, effectiveZoom)));
+		painter.setFont(labelFont);
+
+		QPen pen(QColor(255, 130, 220, 220));
+		pen.setWidthF(1.0);
+		painter.setPen(pen);
+		painter.setBrush(Qt::NoBrush);
+
+		for (const auto& s : _vizierStars) {
+			const auto vp = toViewport(s.x, s.y);
+			// Same magnitude → radius formula as the catalog overlay.
+			const auto rawR = (200.0 - s.magnitude * 10.0) / 5.02;
+			const auto rPx  = std::max(1.5, rawR * effectiveZoom * 0.15);
+			painter.drawEllipse(vp, rPx, rPx);
+			if (effectiveZoom >= 0.6) {
+				painter.drawText(vp + QPointF(rPx + 3, -rPx - 2),
+					QString::number(s.magnitude, 'f', 1));
 			}
 		}
 	}

@@ -590,49 +590,41 @@ void variable_star_annotation(IHttpClient& http,
                               const Header& head,
                               int annotate_mode,
                               double years_since_2000,
-                              [[maybe_unused]] bool extract_visible) {
+                              [[maybe_unused]] bool extract_visible,
+                              MessageHook log) {
     auto lim_magnitude = -99.0;
-    
+
     switch (annotate_mode) {
-        case 0:
-        case 1:
-            lim_magnitude = -99;
-            // TODO: load_variable() -- local DB load, not ported here.
-            break;
-        case 2:
-            lim_magnitude = -99;
-            // TODO: load_variable_13().
-            break;
-        case 3:
-            lim_magnitude = -99;
-            // TODO: load_variable_15().
-            break;
+        case 0: case 1: case 2: case 3:
+            // Local variable-star catalog modes — depend on data files
+            // (variable.csv / variable13.csv / variable15.csv) that ASTAP
+            // distributes separately. Not ported.
+            if (log) log("Local variable-star catalog modes are not available "
+                         "in this build; use the online modes (4–15).");
+            return;
         case 4: case 8: case 12:  lim_magnitude = 11; break;
         case 5: case 9: case 13:  lim_magnitude = 13; break;
         case 6: case 19: case 14: lim_magnitude = 15; break;
         case 7: case 11: case 15: lim_magnitude = 99; break;
         default: lim_magnitude = 99; break;
     }
-    
-    if (lim_magnitude > 0) {
-        // Online flow: sequential checks; any failure short-circuits
-        if (aavso_update_required(head)) {
-            auto period_filt = annotate_mode < 8;
-            if (!download_vsx(http, head, lim_magnitude,
-                              years_since_2000, period_filt)) {
-                // TODO: surface "No VSX data!" via injected logger.
-                return;
-            }
-            if (!download_vsp(http, head, lim_magnitude)) {
-                // TODO: surface "No VSP data!" via injected logger.
-                return;
-            }
+
+    // Online flow: refresh both halves only when the cache is stale.
+    if (aavso_update_required(head)) {
+        auto period_filt = annotate_mode < 8;
+        if (!download_vsx(http, head, lim_magnitude,
+                          years_since_2000, period_filt)) {
+            if (log) log("No VSX data!");
+            return;
         }
-        // TODO: date_to_jd() + plot_vsx_vsp() -- drawing/extraction half.
-    } else {
-        // Local-database branch -- not ported.
-        // TODO: plot_deepsky() invocation.
+        if (!download_vsp(http, head, lim_magnitude)) {
+            if (log) log("No VSP data!");
+            return;
+        }
     }
+    // The caches @c vsx and @c vsp are now populated. Drawing onto the
+    // canvas is the GUI overlay layer's responsibility (see
+    // gui/src/annotation_scanner: project_var_stars).
 }
 
 /// MARK: - annotation_position
@@ -809,7 +801,6 @@ std::vector<SimbadObject> plot_simbad(std::string_view info) {
         }
     }
     
-    // TODO: plot the parsed objects onto the canvas. Not ported.
     return out;
 }
 
@@ -857,8 +848,86 @@ std::vector<VizierObject> plot_vizier(std::string_view info,
         }
     }
     
-    // TODO: plot the parsed rows onto the canvas. Not ported.
     return out;
 }
- 
+
+/// MARK: - URL builders (Simbad / Vizier)
+
+namespace {
+
+// Pascal `str(x:3:10, s)` → fixed-width 10-decimal string.
+[[nodiscard]] std::string fixed10(double v) { return fixed(v, 10); }
+
+// Field-of-view in arcseconds for the full image, mirroring the Pascal
+// `(stopX-startX)*head.cdelt2*3600` idiom but for the entire frame.
+struct FieldArcSec {
+    double w_as = 0.0;
+    double h_as = 0.0;
+};
+
+[[nodiscard]] FieldArcSec field_arcsec(const Header& head) noexcept {
+    const auto scale = std::abs(head.cdelt2) * 3600.0;
+    return { head.width * scale, head.height * scale };
+}
+
+// Build the centre coordinate fragment used by both endpoints:
+// "<RA degrees, 10dp>%2B<DEC degrees, 10dp>" for north dec, "%2D" for south.
+// Matches Pascal lines 14966–14970.
+[[nodiscard]] std::string centre_fragment(const Header& head) {
+    const auto ra_deg  = std::abs(head.ra0)  * 180.0 / kPi;
+    const auto dec_deg = std::abs(head.dec0) * 180.0 / kPi;
+    const auto sgn = (head.dec0 >= 0.0) ? std::string("%2B") : std::string("%2D");
+    return fixed10(ra_deg) + sgn + fixed10(dec_deg);
+}
+
+}  // namespace
+
+std::string make_simbad_url(const Header& head,
+                            SimbadQuery query,
+                            std::string_view maintype) {
+    const auto centre = centre_fragment(head);
+    const auto fov = field_arcsec(head);
+
+    if (query == SimbadQuery::SingleAt) {
+        // sim-coo single-object resolver. Pascal line 15037.
+        const auto ra_deg  = std::abs(head.ra0)  * 180.0 / kPi;
+        const auto dec_deg = std::abs(head.dec0) * 180.0 / kPi;
+        const auto sgn = (head.dec0 >= 0.0) ? std::string("%2B")
+                                            : std::string("%2D");
+        const auto radius = std::max(fov.w_as, fov.h_as) / 2.0;
+        return std::string("https://simbad.u-strasbg.fr/simbad/sim-coo?")
+             + "Radius.unit=arcsec&Radius=" + floattostr6(radius)
+             + "&Coord=" + fixed10(ra_deg) + "d" + sgn + fixed10(dec_deg) + "d"
+             + "&OutputMode=LIST&output.format=ASCII";
+    }
+
+    // sim-sam box query. Criteria differs by query kind.
+    auto criteria = std::string{};
+    switch (query) {
+        case SimbadQuery::DeepSky:         criteria = "(maintype!=*)"; break;
+        case SimbadQuery::DeepSkyFiltered: criteria = "(maintype="
+                                              + std::string(maintype) + ")"; break;
+        case SimbadQuery::Stars:           criteria = "(maintype=*)"; break;
+        case SimbadQuery::SingleAt:        break;  // handled above
+    }
+
+    return std::string("https://simbad.u-strasbg.fr/simbad/sim-sam?")
+         + "submit=submit+query&maxObject=1000&Criteria=" + criteria
+         + "%26+region(box," + centre + ",+"
+         + floattostr4(fov.w_as) + "s+" + floattostr4(fov.h_as) + "s)"
+         + "&OutputMode=LIST&output.format=ASCII";
+}
+
+std::string make_vizier_gaia_url(const Header& head, double limiting_mag) {
+    const auto centre = centre_fragment(head);
+    const auto fov = field_arcsec(head);
+    return std::string("https://vizier.u-strasbg.fr/viz-bin/asu-txt?")
+         + "-source=I/355/Gaiadr3"
+         + "&-out=RA_ICRS,DE_ICRS,Gmag,BPmag,RPmag"
+         + "&-c=" + centre
+         + "&-c.bs=" + floattostr6(fov.w_as) + "/" + floattostr6(fov.h_as)
+         + "&-out.max=10000"
+         + "&Gmag=<" + floattostr4(limiting_mag);
+}
+
 } // namespace

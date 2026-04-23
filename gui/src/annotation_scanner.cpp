@@ -418,4 +418,133 @@ std::vector<CatalogStarMarker> scan_catalog_stars(
 	return markers;
 }
 
+///----------------------------------------
+/// MARK: - Online overlays (VSX/VSP, Simbad, Vizier)
+///----------------------------------------
+
+namespace {
+
+// Reject markers that fall well outside the frame. Mirrors the slop used by
+// the deep-sky and catalog-star overlays above.
+constexpr double kOverlaySlopPx = 50.0;
+
+[[nodiscard]] bool inFrame(const astap::Header& head, double px, double py) noexcept {
+	return px >= -kOverlaySlopPx && px <= head.width  + kOverlaySlopPx
+	    && py >= -kOverlaySlopPx && py <= head.height + kOverlaySlopPx;
+}
+
+}  // namespace
+
+std::vector<VarStarMarker> project_var_stars(const astap::Header& head) {
+	auto out = std::vector<VarStarMarker>{};
+	if (head.naxis == 0 || head.cd1_1 == 0.0) {
+		return out;
+	}
+
+	out.reserve(astap::core::vsx.size() + astap::core::vsp.size());
+
+	for (const auto& v : astap::core::vsx) {
+		auto px = 0.0, py = 0.0;
+		astap::core::celestial_to_pixel(head, v.ra, v.dec, px, py);
+		if (!inFrame(head, px, py)) continue;
+		auto m = VarStarMarker{};
+		m.name = QString::fromStdString(v.name);
+		// Display range "max → min" if both present, else whichever exists.
+		if (!v.maxmag.empty() && !v.minmag.empty()) {
+			m.magText = QString::fromStdString(v.maxmag + "-" + v.minmag);
+		} else if (!v.maxmag.empty()) {
+			m.magText = QString::fromStdString(v.maxmag);
+		} else if (!v.minmag.empty()) {
+			m.magText = QString::fromStdString(v.minmag);
+		}
+		m.x = px;
+		m.y = py;
+		m.isComparison = false;
+		out.push_back(std::move(m));
+	}
+
+	for (const auto& c : astap::core::vsp) {
+		auto px = 0.0, py = 0.0;
+		astap::core::celestial_to_pixel(head, c.ra, c.dec, px, py);
+		if (!inFrame(head, px, py)) continue;
+		auto m = VarStarMarker{};
+		m.name = QString::fromStdString(c.auid);
+		// Prefer V, else B, else any band that's present (skip "?" placeholders).
+		auto pick = [](const std::string& s) {
+			return (!s.empty() && s != "?") ? QString::fromStdString(s) : QString{};
+		};
+		m.magText = pick(c.Vmag);
+		if (m.magText.isEmpty()) m.magText = pick(c.Bmag);
+		if (m.magText.isEmpty()) m.magText = pick(c.Rmag);
+		m.x = px;
+		m.y = py;
+		m.isComparison = true;
+		out.push_back(std::move(m));
+	}
+	return out;
+}
+
+std::vector<SimbadMarker> project_simbad(
+		const std::vector<astap::core::SimbadObject>& objects,
+		const astap::Header& head) {
+	auto out = std::vector<SimbadMarker>{};
+	if (head.naxis == 0 || head.cd1_1 == 0.0) {
+		return out;
+	}
+	out.reserve(objects.size());
+
+	// Simbad encodes ra_units = round(ra_hours * 864000 / 24)
+	//   → ra_hours = ra_units * 24 / 864000 = ra_units / 36000
+	//   → ra_rad   = ra_hours * pi / 12
+	// And dec_units = round(sign * dec_deg * 324000 / 90)
+	//   → dec_deg  = dec_units * 90 / 324000 = dec_units / 3600
+	//   → dec_rad  = dec_deg * pi / 180
+	for (const auto& o : objects) {
+		const auto ra_rad  = static_cast<double>(o.ra_units)  / 36000.0 * (kPi / 12.0);
+		const auto dec_rad = static_cast<double>(o.dec_units) / 3600.0  * (kPi / 180.0);
+		auto px = 0.0, py = 0.0;
+		astap::core::celestial_to_pixel(head, ra_rad, dec_rad, px, py);
+		if (!inFrame(head, px, py)) continue;
+
+		auto m = SimbadMarker{};
+		m.name = QString::fromStdString(o.name);
+		m.type = QString::fromStdString(o.type);
+		m.x = px;
+		m.y = py;
+		m.magnitude = o.magnitude;
+		m.sizeArcmin = o.size_arcmin;
+		out.push_back(std::move(m));
+	}
+	return out;
+}
+
+std::vector<VizierMarker> project_vizier(
+		const std::vector<astap::core::VizierObject>& rows,
+		const astap::Header& head) {
+	auto out = std::vector<VizierMarker>{};
+	if (head.naxis == 0 || head.cd1_1 == 0.0) {
+		return out;
+	}
+	out.reserve(rows.size());
+
+	// Vizier encodes ra_units = round(ra_deg * 864000 / 360) = ra_deg * 2400
+	//   → ra_rad  = ra_units / 2400 * pi / 180
+	// dec_units = round(dec_deg * 324000 / 90) = dec_deg * 3600
+	//   → dec_rad = ra_units / 3600 * pi / 180
+	for (const auto& r : rows) {
+		const auto ra_rad  = static_cast<double>(r.ra_units)  / 2400.0 * (kPi / 180.0);
+		const auto dec_rad = static_cast<double>(r.dec_units) / 3600.0 * (kPi / 180.0);
+		auto px = 0.0, py = 0.0;
+		astap::core::celestial_to_pixel(head, ra_rad, dec_rad, px, py);
+		if (!inFrame(head, px, py)) continue;
+		out.push_back({.x = px, .y = py, .magnitude = r.magnitude});
+	}
+
+	// Brightest first — the painter draws big circles first so labels read
+	// cleanly without smaller overlapping markers covering them.
+	std::sort(out.begin(), out.end(),
+		[](const auto& a, const auto& b) { return a.magnitude < b.magnitude; });
+	return out;
+}
+
 } // namespace astap::gui

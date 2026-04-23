@@ -47,7 +47,7 @@ if(NOT DEFINED Qt6_DIR AND NOT DEFINED CMAKE_PREFIX_PATH)
 	endforeach()
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network)
 
 qt_standard_project_setup()
 
@@ -88,6 +88,8 @@ set(GUI_SOURCES
 	src/preferences_dialog.h
 	src/qt_image_decoder.cpp
 	src/qt_image_decoder.h
+	src/qt_http_client.cpp
+	src/qt_http_client.h
 )
 
 # ---- Target -----------------------------------------------------------------
@@ -104,6 +106,7 @@ target_link_libraries(astap_gui PRIVATE
 	Qt6::Gui
 	Qt6::Widgets
 	Qt6::Concurrent
+	Qt6::Network
 )
 
 target_compile_features(astap_gui PRIVATE cxx_std_23)

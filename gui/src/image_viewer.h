@@ -168,6 +168,21 @@ public:
 	void setCatalogStars(std::vector<CatalogStarMarker> markers);
 	void clearCatalogStars();
 	[[nodiscard]] const std::vector<CatalogStarMarker>& catalogStars() const noexcept { return _catalogStars; }
+
+	/// @brief Install an AAVSO VSX/VSP variable + comparison-star overlay.
+	void setVarStars(std::vector<VarStarMarker> markers);
+	void clearVarStars();
+	[[nodiscard]] const std::vector<VarStarMarker>& varStars() const noexcept { return _varStars; }
+
+	/// @brief Install a Simbad-resolved object overlay.
+	void setSimbadObjects(std::vector<SimbadMarker> markers);
+	void clearSimbadObjects();
+	[[nodiscard]] const std::vector<SimbadMarker>& simbadObjects() const noexcept { return _simbadObjects; }
+
+	/// @brief Install a Vizier (Gaia) star overlay.
+	void setVizierStars(std::vector<VizierMarker> markers);
+	void clearVizierStars();
+	[[nodiscard]] const std::vector<VizierMarker>& vizierStars() const noexcept { return _vizierStars; }
 	///@}
 
 	/// @name Saturation
@@ -241,6 +256,9 @@ private:
 	std::vector<DetectedStar> _stars;
 	std::vector<AnnotationMarker> _annotations;
 	std::vector<CatalogStarMarker> _catalogStars;
+	std::vector<VarStarMarker> _varStars;
+	std::vector<SimbadMarker> _simbadObjects;
+	std::vector<VizierMarker> _vizierStars;
 	ConstellationOverlay _constellations;
 };
 

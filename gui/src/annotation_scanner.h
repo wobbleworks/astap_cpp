@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include "../../src/core/online.h"
 #include "../../src/types.h"
 
 #include <QString>
@@ -126,5 +127,78 @@ struct CatalogStarMarker {
 
 [[nodiscard]] std::vector<CatalogStarMarker> scan_catalog_stars(
     const astap::Header& head, int max_markers = 1000);
+
+///----------------------------------------
+/// @struct VarStarMarker
+/// @brief Variable / comparison star projected into pixel coordinates.
+///----------------------------------------
+
+struct VarStarMarker {
+	QString name;
+	QString magText;     ///< @brief V mag (or B fallback) as text; empty = unknown
+	double x = 0.0;      ///< @brief FITS pixel, 1-based
+	double y = 0.0;
+	bool isComparison = false;  ///< @brief true = AAVSO VSP comp/check; false = VSX variable
+};
+
+///----------------------------------------
+/// @brief Project the cached AAVSO @c vsx (variables) and @c vsp
+///        (comparison/check) catalogs into pixel space.
+/// @details Caller must have populated the caches via
+///          @c astap::core::download_vsx and @c astap::core::download_vsp
+///          (or @c variable_star_annotation) first.
+/// @param head FITS header with a valid WCS solution.
+/// @return Variable + comparison-star markers inside the FOV.
+///----------------------------------------
+
+[[nodiscard]] std::vector<VarStarMarker> project_var_stars(
+    const astap::Header& head);
+
+///----------------------------------------
+/// @struct SimbadMarker
+/// @brief Simbad-resolved object projected into pixel coordinates.
+///----------------------------------------
+
+struct SimbadMarker {
+	QString name;
+	QString type;        ///< @brief Simbad maintype (e.g. "Galaxy", "OpC", "*")
+	double x = 0.0;
+	double y = 0.0;
+	double magnitude = 0.0;  ///< @brief 0 = unknown
+	double sizeArcmin = 0.0; ///< @brief 0 = unknown (single-object reply only)
+};
+
+///----------------------------------------
+/// @brief Project parsed Simbad objects into pixel space.
+/// @param objects Result of @c astap::core::plot_simbad on a fetched body.
+/// @param head    FITS header with a valid WCS solution.
+/// @return Markers inside the FOV.
+///----------------------------------------
+
+[[nodiscard]] std::vector<SimbadMarker> project_simbad(
+    const std::vector<astap::core::SimbadObject>& objects,
+    const astap::Header& head);
+
+///----------------------------------------
+/// @struct VizierMarker
+/// @brief Vizier (Gaia) star projected into pixel coordinates.
+///----------------------------------------
+
+struct VizierMarker {
+	double x = 0.0;
+	double y = 0.0;
+	double magnitude = 0.0;
+};
+
+///----------------------------------------
+/// @brief Project parsed Vizier rows into pixel space.
+/// @param rows  Result of @c astap::core::plot_vizier on a fetched body.
+/// @param head  FITS header with a valid WCS solution.
+/// @return Markers inside the FOV, brightest first.
+///----------------------------------------
+
+[[nodiscard]] std::vector<VizierMarker> project_vizier(
+    const std::vector<astap::core::VizierObject>& rows,
+    const astap::Header& head);
 
 } // namespace astap::gui

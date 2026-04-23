@@ -16,6 +16,7 @@
 #include "focus_dialog.h"
 #include "photometry_dialog.h"
 #include "preferences_dialog.h"
+#include "qt_http_client.h"
 #include "solve_dialog.h"
 #include "sqm_dialog.h"
 #include "stack_window.h"
@@ -25,6 +26,7 @@
 #include "../../src/core/fits.h"
 #include "../../src/core/globals.h"
 #include "../../src/core/image_io.h"
+#include "../../src/core/online.h"
 #include "../../src/core/wcs.h"
 #include "../../src/image/tiff.h"
 #include "../../src/reference/star_database.h"
@@ -118,6 +120,9 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionInspect, &QAction::triggered, this, &MainWindow::inspectImage);
 	connect(_ui->actionAnnotate, &QAction::triggered, this, &MainWindow::annotateDeepSky);
 	connect(_ui->actionCatalogStars, &QAction::triggered, this, &MainWindow::overlayCatalogStars);
+	connect(_ui->actionVariableStars, &QAction::triggered, this, &MainWindow::overlayVariableStars);
+	connect(_ui->actionSimbadObjects, &QAction::triggered, this, &MainWindow::overlaySimbadObjects);
+	connect(_ui->actionVizierGaia, &QAction::triggered, this, &MainWindow::overlayVizierGaia);
 	connect(_ui->actionPhotometry, &QAction::triggered, this, &MainWindow::openPhotometryDialog);
 	connect(_ui->actionSqm, &QAction::triggered, this, &MainWindow::openSqmDialog);
 	connect(_ui->actionFocus, &QAction::triggered, this, &MainWindow::openFocusDialog);
@@ -162,6 +167,10 @@ MainWindow::MainWindow(QWidget* parent) :
 		_ui->imageViewer->clearStarMarkers();
 		_ui->imageViewer->clearAnnotations();
 		_ui->imageViewer->clearConstellations();
+		_ui->imageViewer->clearCatalogStars();
+		_ui->imageViewer->clearVarStars();
+		_ui->imageViewer->clearSimbadObjects();
+		_ui->imageViewer->clearVizierStars();
 	});
 
 	connect(_ui->actionZoomIn, &QAction::triggered,
@@ -891,6 +900,122 @@ void MainWindow::overlayCatalogStars() {
 	const auto n = markers.size();
 	_ui->imageViewer->setCatalogStars(std::move(markers));
 	statusBar()->showMessage(tr("%1 catalog stars overlaid").arg(n));
+}
+
+void MainWindow::overlayVariableStars() {
+	if (astap::head.cdelt2 == 0.0) {
+		QMessageBox::information(this, tr("Variable Stars"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (!_ui->imageViewer->varStars().empty()) {
+		_ui->imageViewer->clearVarStars();
+		statusBar()->showMessage(tr("Variable-star overlay cleared"));
+		return;
+	}
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	auto http = QtHttpClient{};
+	auto loggedMsg = QString{};
+	auto log = [&](const std::string& s) {
+		if (loggedMsg.isEmpty()) loggedMsg = QString::fromStdString(s);
+	};
+	// Mode 6 → online VSX/VSP, limiting magnitude 15 (a sensible default for
+	// most amateur fields). 4 = m11, 5 = m13, 6 = m15, 7 = unlimited.
+	astap::core::variable_star_annotation(http, astap::head, /*mode=*/6,
+	                                      /*years_since_2000=*/0.0,
+	                                      /*extract_visible=*/false, log);
+	auto markers = project_var_stars(astap::head);
+	QGuiApplication::restoreOverrideCursor();
+
+	if (markers.empty()) {
+		QMessageBox::information(this, tr("Variable Stars"),
+			loggedMsg.isEmpty()
+				? tr("No VSX/VSP entries found in this field.")
+				: loggedMsg);
+		return;
+	}
+
+	const auto n = markers.size();
+	_ui->imageViewer->setVarStars(std::move(markers));
+	statusBar()->showMessage(tr("%1 VSX/VSP markers overlaid").arg(n));
+}
+
+void MainWindow::overlaySimbadObjects() {
+	if (astap::head.cdelt2 == 0.0) {
+		QMessageBox::information(this, tr("Simbad Objects"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (!_ui->imageViewer->simbadObjects().empty()) {
+		_ui->imageViewer->clearSimbadObjects();
+		statusBar()->showMessage(tr("Simbad overlay cleared"));
+		return;
+	}
+
+	const auto url = astap::core::make_simbad_url(astap::head,
+		astap::core::SimbadQuery::DeepSky);
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	auto http = QtHttpClient{};
+	auto reply = http.get(url);
+	QGuiApplication::restoreOverrideCursor();
+
+	if (!reply) {
+		QMessageBox::warning(this, tr("Simbad Objects"),
+			tr("Simbad request failed: %1").arg(QString::fromStdString(reply.error())));
+		return;
+	}
+	const auto objects = astap::core::plot_simbad(*reply);
+	auto markers = project_simbad(objects, astap::head);
+	if (markers.empty()) {
+		QMessageBox::information(this, tr("Simbad Objects"),
+			tr("Simbad returned no deep-sky objects in this field."));
+		return;
+	}
+	const auto n = markers.size();
+	_ui->imageViewer->setSimbadObjects(std::move(markers));
+	statusBar()->showMessage(tr("%1 Simbad objects overlaid").arg(n));
+}
+
+void MainWindow::overlayVizierGaia() {
+	if (astap::head.cdelt2 == 0.0) {
+		QMessageBox::information(this, tr("Vizier Gaia"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (!_ui->imageViewer->vizierStars().empty()) {
+		_ui->imageViewer->clearVizierStars();
+		statusBar()->showMessage(tr("Vizier overlay cleared"));
+		return;
+	}
+
+	// Default limiting Gaia G magnitude — matches the VSX default tier.
+	constexpr auto kLimitMag = 15.0;
+	const auto url = astap::core::make_vizier_gaia_url(astap::head, kLimitMag);
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	auto http = QtHttpClient{};
+	auto reply = http.get(url);
+	QGuiApplication::restoreOverrideCursor();
+
+	if (!reply) {
+		QMessageBox::warning(this, tr("Vizier Gaia"),
+			tr("Vizier request failed: %1").arg(QString::fromStdString(reply.error())));
+		return;
+	}
+	// No filter transform — keep raw G magnitudes for now (filter selection
+	// can be exposed in a follow-up dialog along with the magnitude limit).
+	const auto rows = astap::core::plot_vizier(*reply, "G", nullptr);
+	auto markers = project_vizier(rows, astap::head);
+	if (markers.empty()) {
+		QMessageBox::information(this, tr("Vizier Gaia"),
+			tr("Vizier returned no Gaia rows in this field."));
+		return;
+	}
+	const auto n = markers.size();
+	_ui->imageViewer->setVizierStars(std::move(markers));
+	statusBar()->showMessage(tr("%1 Vizier Gaia stars overlaid").arg(n));
 }
 
 void MainWindow::showSolverLog() {

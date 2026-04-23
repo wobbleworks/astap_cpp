@@ -58,6 +58,9 @@ private slots:
 	void onAnalyseFinished();
 	void annotateDeepSky();
 	void overlayCatalogStars();
+	void overlayVariableStars();
+	void overlaySimbadObjects();
+	void overlayVizierGaia();
 	void saveFile();
 	void saveFileAs();
 	void inspectImage();

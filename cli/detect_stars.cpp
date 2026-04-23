@@ -42,28 +42,56 @@ int main(int argc, char* argv[]) {
 
 	std::cout << "loaded: " << astap::head.width << "x" << astap::head.height
 	          << " naxis3=" << astap::head.naxis3
-	          << " nrbits=" << astap::nrbits << '\n';
+	          << " nrbits=" << astap::nrbits
+	          << " cdelt1=" << astap::head.cdelt1
+	          << " cdelt2=" << astap::head.cdelt2
+	          << " fov_deg(height)=" << (std::abs(astap::head.cdelt2) * astap::head.height)
+	          << '\n';
 
 	astap::StarList starlist;
 	std::string warning;
-	const auto hfd_min = std::max(0.8, astap::hfd_min_setting);
+	const auto hfd_min = (argc >= 5) ? std::atof(argv[4])
+	                                 : std::max(0.8, astap::hfd_min_setting);
 	const auto hfd_max = astap::hfd_max_setting;
-	const auto max_stars = astap::max_stars_setting;
+	const auto max_stars = (argc >= 3) ? std::atoi(argv[2]) : astap::max_stars_setting;
 
 	std::cout << "settings: hfd_min=" << hfd_min
 	          << " hfd_max=" << hfd_max
 	          << " max_stars=" << max_stars << '\n';
 
+	// Pre-compute background on the full image so we can print its state
+	// before find_stars runs.
+	astap::core::get_background(/*colour=*/0, astap::img_loaded,
+		/*calc_hist=*/true, /*calc_noise_level=*/true, astap::bck);
+	std::printf("bck.backgr       = %.1f\n", astap::bck.backgr);
+	std::printf("bck.noise_level  = %.2f\n", astap::bck.noise_level);
+	std::printf("bck.star_level   = %.1f  (need > 30*noise = %.1f)\n",
+	            astap::bck.star_level,  30.0 * astap::bck.noise_level);
+	std::printf("bck.star_level2  = %.1f  (need > 30*noise = %.1f)\n",
+	            astap::bck.star_level2, 30.0 * astap::bck.noise_level);
+	std::printf("retry thresholds: 30σ=%.1f  7σ=%.1f  3σ=%.1f\n",
+	            30.0 * astap::bck.noise_level,
+	             7.0 * astap::bck.noise_level,
+	             3.0 * astap::bck.noise_level);
+
+	const auto bin_override = (argc >= 4) ? std::atoi(argv[3]) : 1;
+	std::printf("binning=%d\n", bin_override);
 	astap::solving::bin_and_find_stars(
-		astap::img_loaded, /*binning=*/1, /*cropping=*/1.0,
+		astap::img_loaded, /*binning=*/bin_override, /*cropping=*/1.0,
 		hfd_min, hfd_max, max_stars, /*get_hist=*/true,
 		starlist, warning);
 
 	if (!warning.empty()) { std::cout << "warn: " << warning << '\n'; }
 
+	std::printf("after find_stars (solver path):\n");
+	std::printf("  bck.backgr       = %.1f\n", astap::bck.backgr);
+	std::printf("  bck.noise_level  = %.2f\n", astap::bck.noise_level);
+	std::printf("  bck.star_level   = %.1f\n", astap::bck.star_level);
+	std::printf("  bck.star_level2  = %.1f\n", astap::bck.star_level2);
+
 	const auto n = starlist.empty() ? 0 : static_cast<int>(starlist[0].size());
-	std::cout << "detected " << n << " stars:\n";
-	for (int i = 0; i < n; ++i) {
+	std::cout << "detected " << n << " stars (first 20):\n";
+	for (int i = 0; i < std::min(n, 20); ++i) {
 		std::printf("  [%2d] x=%7.2f y=%7.2f\n",
 		            i, starlist[0][i], starlist[1][i]);
 	}

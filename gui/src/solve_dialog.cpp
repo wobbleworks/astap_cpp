@@ -194,8 +194,10 @@ void SolveDialog::prefillFromHeader(const astap::Header& head) {
 	// If the loaded image already carries a WCS solution, surface it as the
 	// hint so a re-solve uses the existing centre.
 	if (head.cdelt2 != 0.0) {
-		// Existing scale × image height = FOV height in degrees.
-		const auto fov = std::abs(head.cdelt2) * head.height / 3600.0;
+		// cdelt2 is degrees/pixel (engine convention; see the note in
+		// project CLAUDE). Multiplying by height yields degrees directly —
+		// no /3600 factor.
+		const auto fov = std::abs(head.cdelt2) * head.height;
 		if (fov > 0.0) {
 			_fovDeg->setValue(fov);
 		}
