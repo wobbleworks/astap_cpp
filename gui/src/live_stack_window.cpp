@@ -10,10 +10,12 @@
 #include "image_viewer.h"
 
 #include "../../src/core/globals.h"
+#include "../../src/stacking/live_monitoring.h"
 #include "../../src/stacking/live_stacking.h"
 #include "../../src/stacking/stack.h"
 
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -34,9 +36,10 @@ namespace astap::gui {
 
 // MARK: - LiveStackWorker
 
-LiveStackWorker::LiveStackWorker(QString watchDir, QObject* parent) :
+LiveStackWorker::LiveStackWorker(QString watchDir, Mode mode, QObject* parent) :
 	QThread(parent),
-	_watchDir(std::move(watchDir)) {
+	_watchDir(std::move(watchDir)),
+	_mode(mode) {
 }
 
 LiveStackWorker::~LiveStackWorker() {
@@ -45,25 +48,39 @@ LiveStackWorker::~LiveStackWorker() {
 }
 
 void LiveStackWorker::requestStop() {
-	// The engine loop polls astap::esc_pressed and exits when set. Setting
-	// it here is safe to do repeatedly.
+	// Both session types poll astap::esc_pressed and exit when set.
+	// Setting it here is safe to do repeatedly.
 	astap::esc_pressed.store(true);
 }
 
 void LiveStackWorker::run() {
-	_session = std::make_unique<astap::stacking::LiveStackSession>(
-		std::filesystem::path(_watchDir.toStdString()));
+	const auto dir = std::filesystem::path(_watchDir.toStdString());
 
-	_session->set_message_hook([this](const std::string& msg) {
+	auto messageHook = [this](const std::string& msg) {
 		emit message(QString::fromStdString(msg));
-	});
-	_session->set_frame_added_hook(
-		[this](int accepted, int rejected, int total) {
-			emit frameProcessed(accepted, rejected, total);
-		});
+	};
 
-	_session->run();
-	_session.reset();
+	if (_mode == Mode::MonitorOnly) {
+		_monitorSession = std::make_unique<astap::stacking::LiveMonitorSession>(dir);
+		_monitorSession->set_message_hook(messageHook);
+		_monitorSession->set_frame_loaded_hook([this](int total) {
+			// Map to the shared signal: accepted == total, rejected == 0.
+			// The window's onWorkerFrame path refreshes the viewer when
+			// `accepted > 0`, which is what we want here too.
+			emit frameProcessed(total, 0, total);
+		});
+		_monitorSession->run();
+		_monitorSession.reset();
+	} else {
+		_stackSession = std::make_unique<astap::stacking::LiveStackSession>(dir);
+		_stackSession->set_message_hook(messageHook);
+		_stackSession->set_frame_added_hook(
+			[this](int accepted, int rejected, int total) {
+				emit frameProcessed(accepted, rejected, total);
+			});
+		_stackSession->run();
+		_stackSession.reset();
+	}
 }
 
 // MARK: - LiveStackWindow
@@ -89,6 +106,25 @@ LiveStackWindow::LiveStackWindow(QWidget* parent) :
 	folderRow->addWidget(_folderEdit, 1);
 	folderRow->addWidget(_browseButton);
 	root->addLayout(folderRow);
+
+	// Mode selector: live-stack (align + average) vs. monitor-only (just
+	// display each new frame as it lands).
+	auto* modeRow = new QHBoxLayout();
+	modeRow->addWidget(new QLabel(tr("Mode:"), this));
+	_modeCombo = new QComboBox(this);
+	_modeCombo->addItem(tr("Live stack (align + average)"),
+		static_cast<int>(LiveStackWorker::Mode::LiveStack));
+	_modeCombo->addItem(tr("Monitor only (display each new frame)"),
+		static_cast<int>(LiveStackWorker::Mode::MonitorOnly));
+	{
+		QSettings settings;
+		const auto persisted = settings.value("liveStack/mode",
+			static_cast<int>(LiveStackWorker::Mode::LiveStack)).toInt();
+		const auto idx = _modeCombo->findData(persisted);
+		if (idx >= 0) _modeCombo->setCurrentIndex(idx);
+	}
+	modeRow->addWidget(_modeCombo, 1);
+	root->addLayout(modeRow);
 
 	// Calibration group — Dark + Flat pickers. Writes the same engine
 	// globals as the batch Stack window's Calibration tab, so state is
@@ -307,7 +343,11 @@ void LiveStackWindow::startStacking() {
 	_paused = false;
 	astap::pause_pressed.store(false);
 
-	_worker = new LiveStackWorker(folder, this);
+	const auto mode = static_cast<LiveStackWorker::Mode>(
+		_modeCombo->currentData().toInt());
+	QSettings().setValue("liveStack/mode", static_cast<int>(mode));
+
+	_worker = new LiveStackWorker(folder, mode, this);
 	connect(_worker, &LiveStackWorker::message,
 	        this, &LiveStackWindow::onWorkerMessage,
 	        Qt::QueuedConnection);
@@ -371,6 +411,7 @@ void LiveStackWindow::setRunningUi(bool running) {
 	_stopButton->setEnabled(running);
 	_browseButton->setEnabled(!running);
 	_folderEdit->setEnabled(!running);
+	_modeCombo->setEnabled(!running);
 	_darkBrowse->setEnabled(!running);
 	_darkClear->setEnabled(!running);
 	_flatBrowse->setEnabled(!running);

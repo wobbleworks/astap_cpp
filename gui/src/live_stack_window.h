@@ -16,6 +16,7 @@
 #include <atomic>
 #include <memory>
 
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -23,6 +24,7 @@ class QPushButton;
 
 namespace astap::stacking {
 class LiveStackSession;
+class LiveMonitorSession;
 }
 
 ///----------------------------------------
@@ -41,13 +43,20 @@ class LiveStackWorker final : public QThread {
 	Q_OBJECT
 
 public:
-	explicit LiveStackWorker(QString watchDir, QObject* parent = nullptr);
+	enum class Mode { LiveStack, MonitorOnly };
+
+	LiveStackWorker(QString watchDir, Mode mode, QObject* parent = nullptr);
 	~LiveStackWorker() override;
 
 	void requestStop();
 
 signals:
+	/// @brief Emitted with each log line from the session.
 	void message(QString text);
+
+	/// @brief Emitted after a frame attempt.
+	///        LiveStack mode: (accepted, rejected, total).
+	///        MonitorOnly mode: (total, 0, total) — every frame counts.
 	void frameProcessed(int accepted, int rejected, int total);
 
 protected:
@@ -55,7 +64,9 @@ protected:
 
 private:
 	QString _watchDir;
-	std::unique_ptr<astap::stacking::LiveStackSession> _session;
+	Mode    _mode;
+	std::unique_ptr<astap::stacking::LiveStackSession>   _stackSession;
+	std::unique_ptr<astap::stacking::LiveMonitorSession> _monitorSession;
 };
 
 ///----------------------------------------
@@ -98,6 +109,7 @@ private:
 
 	QLineEdit* _folderEdit = nullptr;
 	QPushButton* _browseButton = nullptr;
+	QComboBox* _modeCombo = nullptr;
 	QPushButton* _startButton = nullptr;
 	QPushButton* _pauseButton = nullptr;
 	QPushButton* _stopButton = nullptr;
