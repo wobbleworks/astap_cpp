@@ -81,13 +81,6 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     runs-on: windows-2022
-    # Opt in to the Node 24 JavaScript-action runtime ahead of the June 2026
-    # cutover. ilammy/msvc-dev-cmd@v1 still ships its action.yml pinned to
-    # Node 20; this env var forces the runner to execute it under Node 24
-    # so we surface any incompatibility early. Drop once that action ships
-    # a Node-24-aware release.
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -111,12 +104,17 @@ jobs:
           cache: true
 
       - name: Set up MSVC developer shell
-        # ilammy/msvc-dev-cmd@v1's action.yml still declares runs.using:
-        # "node20" as of Apr 2026. The job-level FORCE_JAVASCRIPT_ACTIONS_TO_NODE24
-        # env var forces the runner to execute it under Node 24 so we
-        # surface any incompatibility before GitHub flips the default in
-        # June 2026.
-        uses: ilammy/msvc-dev-cmd@v1
+        # Inline replacement for ilammy/msvc-dev-cmd@v1 (still pinned to
+        # Node 20 as of Apr 2026). vswhere locates the latest VS install
+        # on the runner; vcvars64.bat sets every MSVC env var; the final
+        # `set >> %GITHUB_ENV%` exports them so subsequent steps inherit
+        # PATH, INCLUDE, LIB, etc.
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set "VS_INSTALL=%%i"
+          if "%VS_INSTALL%"=="" (echo Visual Studio not found via vswhere & exit /b 1)
+          call "%VS_INSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set >> "%GITHUB_ENV%"
 
       - name: Configure (library + CLI + GUI)
         working-directory: ASTAP++
