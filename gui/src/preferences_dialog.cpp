@@ -41,6 +41,9 @@ constexpr auto kKeySqmLatitude  = "sqm/latitude";
 constexpr auto kKeySqmLongitude = "sqm/longitude";
 constexpr auto kKeySqmTemperature = "sqm/temperature_c";
 constexpr auto kKeySqmPressure    = "sqm/pressure_hpa";
+constexpr auto kKeySiteElevation  = "site/elevation";
+constexpr auto kKeySiteTelescope  = "site/telescope";
+constexpr auto kKeySiteCamera     = "site/camera";
 constexpr auto kKeyRecentFiles    = "files/recent";
 constexpr auto kKeyGeometry       = "window/geometry";
 constexpr auto kKeyWindowState    = "window/state";
@@ -115,6 +118,12 @@ void PreferencesDialog::buildLayout() {
 		_longitude->setPlaceholderText(tr("e.g. 4 53 50 E"));
 		form->addRow(tr("Longitude"), _longitude);
 
+		_elevation = new QLineEdit(page);
+		_elevation->setPlaceholderText(tr("e.g. 25m"));
+		_elevation->setToolTip(tr(
+			"Site elevation; used for the BAA-style AAVSO #LOCATION line."));
+		form->addRow(tr("Elevation"), _elevation);
+
 		_temperature = new QDoubleSpinBox(page);
 		_temperature->setRange(-50.0, 60.0);
 		_temperature->setDecimals(1);
@@ -128,6 +137,19 @@ void PreferencesDialog::buildLayout() {
 		_pressure->setSuffix(tr(" hPa"));
 		_pressure->setValue(1010.0);
 		form->addRow(tr("Pressure"), _pressure);
+
+		_telescope = new QLineEdit(page);
+		_telescope->setPlaceholderText(tr("e.g. SCT 8\" f/10"));
+		_telescope->setToolTip(tr(
+			"Telescope description used by the BAA-style AAVSO #TELESCOPE line."));
+		form->addRow(tr("Telescope"), _telescope);
+
+		_camera = new QLineEdit(page);
+		_camera->setPlaceholderText(tr("e.g. ASI2600MM"));
+		_camera->setToolTip(tr(
+			"Camera description used by the BAA-style AAVSO #CAMERA line. "
+			"If left blank the FITS INSTRUME field is used as a fallback."));
+		form->addRow(tr("Camera"), _camera);
 
 		tabs->addTab(page, tr("Site"));
 	}
@@ -182,8 +204,11 @@ void PreferencesDialog::loadFromSettings() {
 	}
 	_latitude   ->setText(s.value(kKeySqmLatitude).toString());
 	_longitude  ->setText(s.value(kKeySqmLongitude).toString());
+	_elevation  ->setText(s.value(kKeySiteElevation).toString());
 	_temperature->setValue(s.value(kKeySqmTemperature, 10.0).toDouble());
 	_pressure   ->setValue(s.value(kKeySqmPressure,  1010.0).toDouble());
+	_telescope  ->setText(s.value(kKeySiteTelescope).toString());
+	_camera     ->setText(s.value(kKeySiteCamera).toString());
 }
 
 void PreferencesDialog::accept() {
@@ -192,8 +217,11 @@ void PreferencesDialog::accept() {
 	s.setValue(kKeyDatabaseName, _databaseName->currentText());
 	s.setValue(kKeySqmLatitude,    _latitude->text());
 	s.setValue(kKeySqmLongitude,   _longitude->text());
+	s.setValue(kKeySiteElevation,  _elevation->text());
 	s.setValue(kKeySqmTemperature, _temperature->value());
 	s.setValue(kKeySqmPressure,    _pressure->value());
+	s.setValue(kKeySiteTelescope,  _telescope->text());
+	s.setValue(kKeySiteCamera,     _camera->text());
 
 	// Propagate catalog path to the engine so the next operation uses it
 	// without restart.

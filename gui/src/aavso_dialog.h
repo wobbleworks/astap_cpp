@@ -27,6 +27,8 @@
 #include <memory>
 #include <optional>
 
+namespace astap::gui { class LightCurveView; }
+
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -62,6 +64,7 @@ private slots:
 	void onEnsembleToggled(bool ensemble);
 	void onGenerate();   // primary: copy to clipboard
 	void onSaveAs();     // save to .txt
+	void onFetchVspMagnitude();
 
 	// Multi-frame slots
 	void onAddFiles();
@@ -103,6 +106,7 @@ private:
 
 	// Comp-only fields
 	QDoubleSpinBox* _compCatalogMag = nullptr;
+	QPushButton* _fetchVspBtn = nullptr;
 	QCheckBox* _ensembleCheck = nullptr;
 
 	// Common metadata
@@ -126,6 +130,7 @@ private:
 	QPushButton* _clearFilesBtn = nullptr;
 	QPushButton* _measureAllBtn = nullptr;
 	QTableWidget* _resultsTable = nullptr;
+	LightCurveView* _lightCurve = nullptr;
 	QPlainTextEdit* _multiLog = nullptr;
 	QPushButton* _copyMultiBtn = nullptr;
 	QPushButton* _saveMultiBtn = nullptr;

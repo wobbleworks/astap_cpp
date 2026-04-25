@@ -13,10 +13,13 @@
 #include "../../src/core/fits.h"
 #include "../../src/core/globals.h"
 #include "../../src/core/hjd.h"
+#include "../../src/core/online.h"
 #include "../../src/core/photometry.h"
 #include "../../src/core/sqm.h"
 #include "../../src/core/wcs.h"
 #include "../../src/stacking/stack.h"
+#include "light_curve_view.h"
+#include "qt_http_client.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -135,11 +138,18 @@ AavsoDialog::AavsoDialog(QWidget* parent, ImageViewer* viewer)
 	_compCatalogMag->setSingleStep(0.1);
 	_compCatalogMag->setValue(0.0);
 	_compCatalogMag->setSpecialValueText(tr("(none)"));
+	_fetchVspBtn = new QPushButton(tr("Fetch from VSP"), singleTab);
+	_fetchVspBtn->setToolTip(tr(
+		"Look up the AAVSO VSP catalog magnitude for the picked comp star "
+		"in the currently-selected filter."));
+	connect(_fetchVspBtn, &QPushButton::clicked,
+	        this, &AavsoDialog::onFetchVspMagnitude);
 	_ensembleCheck = new QCheckBox(tr("Ensemble (CNAME=ENSEMBLE)"), singleTab);
 	connect(_ensembleCheck, &QCheckBox::toggled,
 	        this, &AavsoDialog::onEnsembleToggled);
 	compRow->addWidget(new QLabel(tr("Comp catalog magnitude:"), singleTab));
 	compRow->addWidget(_compCatalogMag, /*stretch=*/1);
+	compRow->addWidget(_fetchVspBtn);
 	compRow->addWidget(_ensembleCheck);
 	singleLayout->addLayout(compRow);
 	singleLayout->addStretch(1);
@@ -187,6 +197,9 @@ AavsoDialog::AavsoDialog(QWidget* parent, ImageViewer* viewer)
 	_resultsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	_resultsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
 	multiLayout->addWidget(_resultsTable, /*stretch=*/1);
+
+	_lightCurve = new LightCurveView(multiTab);
+	multiLayout->addWidget(_lightCurve, /*stretch=*/1);
 
 	_multiLog = new QPlainTextEdit(multiTab);
 	_multiLog->setReadOnly(true);
@@ -371,6 +384,42 @@ void AavsoDialog::onEnsembleToggled(bool ensemble) {
 	compRow.nameEdit->setEnabled(!ensemble);
 	compRow.pickButton->setEnabled(!ensemble);
 	_compCatalogMag->setEnabled(!ensemble);
+	if (_fetchVspBtn) _fetchVspBtn->setEnabled(!ensemble);
+}
+
+void AavsoDialog::onFetchVspMagnitude() {
+	if (astap::head.cdelt2 == 0.0) {
+		setStatus(tr("Plate-solve the image first (Image → Plate Solve)."), false);
+		return;
+	}
+	const auto& comp = _rows[2];
+	if (!comp.position) {
+		setStatus(tr("Pick the comp star on the image first."), false);
+		return;
+	}
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	auto http = QtHttpClient{};
+	// Generous limit so faint comps in deep fields still match.
+	const auto ok = astap::core::download_vsp(http, astap::head, /*lim=*/18.0);
+	QGuiApplication::restoreOverrideCursor();
+	if (!ok) {
+		setStatus(tr("VSP fetch failed (no network or empty field)."), false);
+		return;
+	}
+
+	const auto filter = _filter->currentText().toStdString();
+	const auto mag = astap::core::find_vsp_magnitude(filter, comp.ra, comp.dec);
+	if (!mag) {
+		setStatus(tr("No VSP entry for the picked comp star in band %1 "
+		             "(within 5″). Try a different filter or pick a charted comp.")
+			.arg(_filter->currentText()), false);
+		return;
+	}
+	_compCatalogMag->setValue(*mag);
+	setStatus(tr("VSP catalog magnitude in %1 = %2.")
+		.arg(_filter->currentText())
+		.arg(*mag, 0, 'f', 3), true);
 }
 
 bool AavsoDialog::validateForReport(QString& why) const {
@@ -452,14 +501,16 @@ QString AavsoDialog::buildReport() const {
 
 	if (opts.baa_style) {
 		// Site coordinates come from the SQM globals (settable via the SQM
-		// dialog or the FITS header). Site elevation, telescope name, and
-		// camera name are not exposed as cross-module globals yet — leave
-		// blank for now; the user can edit the saved report or set them
-		// up via Preferences in a follow-up.
+		// dialog or the FITS header). Elevation/telescope/camera live in
+		// Preferences → Site (Phase 5c). Camera falls back to the FITS
+		// INSTRUME global when left blank.
+		QSettings s;
 		opts.site_lat   = astap::core::sitelat;
 		opts.site_long  = astap::core::sitelong;
-		opts.telescope  = "";
-		opts.camera     = astap::instrum;
+		opts.site_elev  = s.value("site/elevation").toString().toStdString();
+		opts.telescope  = s.value("site/telescope").toString().toStdString();
+		opts.camera     = s.value("site/camera").toString().toStdString();
+		if (opts.camera.empty()) opts.camera = astap::instrum;
 	}
 
 	const auto report = astap::core::format_aavso_report(m, opts);
@@ -573,6 +624,7 @@ void AavsoDialog::onRemoveSelectedFiles() {
 void AavsoDialog::onClearFiles() {
 	_fileList->clear();
 	_resultsTable->setRowCount(0);
+	if (_lightCurve) _lightCurve->setRows({});
 	_multiLog->clear();
 	_measureResult.reset();
 }
@@ -651,6 +703,10 @@ void AavsoDialog::onMeasureFinished() {
 
 	_measureResult = std::make_unique<astap::core::AavsoCollectResult>(std::move(result));
 	rebuildResultsTable();
+	if (_lightCurve) {
+		_lightCurve->setShowComp(!_ensembleCheck->isChecked());
+		_lightCurve->setRows(_measureResult->rows);
+	}
 	_multiStatus->setText(tr("Measured %1 of %2 frame(s); %3 skipped.")
 		.arg(_measureResult->frames_accepted)
 		.arg(_measureResult->frames_total)
@@ -712,9 +768,13 @@ void AavsoDialog::onCopyMultiReport() {
 	opts.magnitude_slope = _magnitudeSlope->value();
 	opts.software_version = std::string(astap::astap_version);
 	if (opts.baa_style) {
+		QSettings s;
 		opts.site_lat   = astap::core::sitelat;
 		opts.site_long  = astap::core::sitelong;
-		opts.camera     = astap::instrum;
+		opts.site_elev  = s.value("site/elevation").toString().toStdString();
+		opts.telescope  = s.value("site/telescope").toString().toStdString();
+		opts.camera     = s.value("site/camera").toString().toStdString();
+		if (opts.camera.empty()) opts.camera = astap::instrum;
 	}
 
 	const auto report = QString::fromStdString(
@@ -747,9 +807,13 @@ void AavsoDialog::onSaveMultiReport() {
 	opts.magnitude_slope = _magnitudeSlope->value();
 	opts.software_version = std::string(astap::astap_version);
 	if (opts.baa_style) {
-		opts.site_lat  = astap::core::sitelat;
-		opts.site_long = astap::core::sitelong;
-		opts.camera    = astap::instrum;
+		QSettings s;
+		opts.site_lat   = astap::core::sitelat;
+		opts.site_long  = astap::core::sitelong;
+		opts.site_elev  = s.value("site/elevation").toString().toStdString();
+		opts.telescope  = s.value("site/telescope").toString().toStdString();
+		opts.camera     = s.value("site/camera").toString().toStdString();
+		if (opts.camera.empty()) opts.camera = astap::instrum;
 	}
 
 	const auto suggested = QStringLiteral("aavso_timeseries.txt");

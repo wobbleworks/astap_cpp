@@ -11,11 +11,14 @@
 #include "fits.h"
 #include "globals.h"
 #include "hjd.h"
+#include "online.h"
 #include "photometry.h"
 #include "wcs.h"
 #include "../stacking/stack.h"
 
 #include <cmath>
+#include <limits>
+#include <string>
 
 ///----------------------------------------
 namespace astap::core {
@@ -147,6 +150,52 @@ AavsoCollectResult collect_aavso_measurements(
 	}
 
 	return result;
+}
+
+namespace {
+
+// Map an AAVSO filter symbol onto the VSP record's per-band magnitude
+// string. Returns nullptr when the band isn't represented in the cache.
+[[nodiscard]] const std::string* select_vsp_band(const Auid& v,
+                                                 std::string_view f) {
+	if (f == "V" || f == "TG") return &v.Vmag;
+	if (f == "B" || f == "TB") return &v.Bmag;
+	if (f == "R" || f == "TR") return &v.Rmag;
+	if (f == "SG")             return &v.SGmag;
+	if (f == "SR")             return &v.SRmag;
+	if (f == "SI")             return &v.SImag;
+	return nullptr;
+}
+
+}  // namespace
+
+std::optional<double> find_vsp_magnitude(std::string_view filter_band,
+                                         double ra, double dec,
+                                         double max_arcsec) {
+	if (vsp.empty()) return std::nullopt;
+
+	const auto cos_dec = std::cos(dec);
+	const auto max_rad = max_arcsec * (M_PI / (180.0 * 3600.0));
+
+	auto best_idx  = std::size_t{0};
+	auto best_dist = std::numeric_limits<double>::infinity();
+	for (auto i = std::size_t{0}; i < vsp.size(); ++i) {
+		const auto dra  = (vsp[i].ra  - ra) * cos_dec;
+		const auto ddec = (vsp[i].dec - dec);
+		const auto d    = std::sqrt(dra * dra + ddec * ddec);
+		if (d < best_dist) { best_dist = d; best_idx = i; }
+	}
+	if (best_dist > max_rad) return std::nullopt;
+
+	const auto* band = select_vsp_band(vsp[best_idx], filter_band);
+	if (!band) return std::nullopt;
+	if (band->empty() || *band == "?") return std::nullopt;
+
+	try {
+		return std::stod(*band);
+	} catch (...) {
+		return std::nullopt;
+	}
 }
 
 } // namespace

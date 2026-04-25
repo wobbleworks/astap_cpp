@@ -56,8 +56,11 @@ private:
 	// Site tab
 	QLineEdit*      _latitude    = nullptr;
 	QLineEdit*      _longitude   = nullptr;
+	QLineEdit*      _elevation   = nullptr;
 	QDoubleSpinBox* _temperature = nullptr;
 	QDoubleSpinBox* _pressure    = nullptr;
+	QLineEdit*      _telescope   = nullptr;
+	QLineEdit*      _camera      = nullptr;
 
 	// Files tab
 	QPushButton* _clearRecentsButton = nullptr;

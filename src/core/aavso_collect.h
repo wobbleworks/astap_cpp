@@ -21,7 +21,9 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 ///----------------------------------------
@@ -90,5 +92,26 @@ struct AavsoCollectResult {
 [[nodiscard]] AavsoCollectResult collect_aavso_measurements(
     const std::vector<std::filesystem::path>& files,
     const AavsoCollectOptions& opts);
+
+///----------------------------------------
+/// @brief Find the documented AAVSO VSP magnitude of the comparison star
+///        nearest @p ra / @p dec in the given filter band.
+/// @details Walks the @c astap::core::vsp global cache (populated by
+///          @c download_vsp) and returns the catalog magnitude of the
+///          nearest entry whose distance is below @p max_arcsec. The
+///          filter symbol selects which colour the AAVSO chart returned;
+///          recognised values are @c "V", @c "B", @c "R", @c "SG",
+///          @c "SR", @c "SI". Returns @c std::nullopt when the cache is
+///          empty, no entry is within range, or the requested band is
+///          unavailable for the matched entry.
+/// @param filter_band The AAVSO filter symbol.
+/// @param ra          Right ascension of the picked comp star (radians).
+/// @param dec         Declination of the picked comp star (radians).
+/// @param max_arcsec  Maximum acceptable separation (default 5″).
+///----------------------------------------
+
+[[nodiscard]] std::optional<double> find_vsp_magnitude(
+    std::string_view filter_band, double ra, double dec,
+    double max_arcsec = 5.0);
 
 } // namespace

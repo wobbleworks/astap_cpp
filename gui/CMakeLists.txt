@@ -94,6 +94,8 @@ set(GUI_SOURCES
 	src/astrometry_net_dialog.h
 	src/aavso_dialog.cpp
 	src/aavso_dialog.h
+	src/light_curve_view.cpp
+	src/light_curve_view.h
 )
 
 # ---- Target -----------------------------------------------------------------
