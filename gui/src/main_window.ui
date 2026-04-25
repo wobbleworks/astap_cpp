@@ -104,6 +104,7 @@
     <addaction name="actionVariableStars"/>
     <addaction name="actionSimbadObjects"/>
     <addaction name="actionVizierGaia"/>
+    <addaction name="actionAsteroids"/>
     <addaction name="actionClearMarkers"/>
     <addaction name="separator"/>
     <addaction name="actionSolve"/>
@@ -111,6 +112,7 @@
     <addaction name="actionShowSolverLog"/>
     <addaction name="separator"/>
     <addaction name="actionPhotometry"/>
+    <addaction name="actionAavsoReport"/>
     <addaction name="actionSqm"/>
     <addaction name="actionFocus"/>
     <addaction name="separator"/>
@@ -272,6 +274,11 @@
     <string>Vi&amp;zier Gaia Catalog…</string>
    </property>
   </action>
+  <action name="actionAsteroids">
+   <property name="text">
+    <string>&amp;Asteroids &amp;&amp; Comets…</string>
+   </property>
+  </action>
   <action name="actionAnalyse">
    <property name="text">
     <string>&amp;Analyse Stars</string>
@@ -322,6 +329,11 @@
   <action name="actionPhotometry">
    <property name="text">
     <string>&amp;Photometric Calibration…</string>
+   </property>
+  </action>
+  <action name="actionAavsoReport">
+   <property name="text">
+    <string>AAVSO Photometry &amp;Report…</string>
    </property>
   </action>
   <action name="actionSqm">

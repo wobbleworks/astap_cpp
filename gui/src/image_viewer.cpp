@@ -11,6 +11,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QPolygonF>
 #include <QResizeEvent>
 #include <QWheelEvent>
 
@@ -165,6 +166,37 @@ void ImageViewer::clearVizierStars() {
 	update();
 }
 
+void ImageViewer::setAsteroids(std::vector<AsteroidMarker> markers) {
+	_asteroids = std::move(markers);
+	update();
+}
+
+void ImageViewer::clearAsteroids() {
+	_asteroids.clear();
+	update();
+}
+
+void ImageViewer::setPickMode(PickRole role) {
+	_pickMode = role;
+	if (role == PickRole::None) {
+		unsetCursor();
+	} else {
+		setCursor(Qt::CrossCursor);
+	}
+}
+
+void ImageViewer::setPickMarker(PickRole role, std::optional<QPointF> imagePos) {
+	const auto idx = static_cast<int>(role);
+	if (idx <= 0 || idx >= static_cast<int>(_pickMarkers.size())) return;
+	_pickMarkers[idx] = imagePos;
+	update();
+}
+
+void ImageViewer::clearPickMarkers() {
+	for (auto& m : _pickMarkers) m.reset();
+	update();
+}
+
 void ImageViewer::clearConstellations() {
 	_constellations.lines.clear();
 	_constellations.labels.clear();
@@ -194,6 +226,9 @@ void ImageViewer::clear() {
 	_varStars.clear();
 	_simbadObjects.clear();
 	_vizierStars.clear();
+	_asteroids.clear();
+	for (auto& m : _pickMarkers) m.reset();
+	_pickMode = PickRole::None;
 	_constellations.lines.clear();
 	_constellations.labels.clear();
 	_sampleMin = _sampleMax = 0.0f;
@@ -621,6 +656,105 @@ void ImageViewer::paintEvent(QPaintEvent* event) {
 			}
 		}
 	}
+
+	// Asteroid / comet overlay — diamond markers with designation + mag.
+	// Comets are drawn larger (match Pascal's 5× asteroid-diameter rule).
+	if ((!_asteroids.empty()) && _header.width > 0 && _header.height > 0) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+
+		const auto w = _header.width;
+		const auto h = _header.height;
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		QFont labelFont = painter.font();
+		labelFont.setPointSizeF(std::max(7.0, 8.5 * std::min(1.0, effectiveZoom)));
+		painter.setFont(labelFont);
+
+		const auto kAsteroidColour = QColor(255, 240, 120, 230);  // yellow
+		const auto kCometColour    = QColor(100, 220, 255, 230);  // icy blue
+
+		for (const auto& a : _asteroids) {
+			const auto vp = toViewport(a.x, a.y);
+			const auto basePx = a.isComet
+				? std::max(12.0, 15.0 * std::min(1.0, effectiveZoom))
+				: std::max( 6.0,  8.0 * std::min(1.0, effectiveZoom));
+
+			QPen pen(a.isComet ? kCometColour : kAsteroidColour);
+			pen.setWidthF(1.2);
+			painter.setPen(pen);
+			painter.setBrush(Qt::NoBrush);
+
+			// Diamond — distinctive vs. the circles used elsewhere.
+			const auto d = QPolygonF{{
+				vp + QPointF(0, -basePx),
+				vp + QPointF(basePx, 0),
+				vp + QPointF(0, basePx),
+				vp + QPointF(-basePx, 0)
+			}};
+			painter.drawPolygon(d);
+
+			if (effectiveZoom >= 0.4) {
+				auto label = a.label;
+				if (a.outdated) label += QStringLiteral(" ⚠");
+				painter.drawText(vp + QPointF(basePx + 3, -basePx - 2), label);
+			}
+		}
+	}
+
+	// Manual photometry pick markers (V/K/C). Bright crosshair circles.
+	if (_header.width > 0 && _header.height > 0) {
+		const auto w = _header.width;
+		const auto h = _header.height;
+		auto toViewport = [&](double fx, double fy) -> QPointF {
+			const auto imgCol = fx - 1.0;
+			const auto imgRow = (h - 1) - (fy - 1.0);
+			const auto srcX = _flipH ? (w - 1 - imgCol) : imgCol;
+			const auto srcY = _flipV ? ((h - 1) - imgRow) : imgRow;
+			return {dst.left() + (srcX + 0.5) * effectiveZoom,
+			        dst.top() + (srcY + 0.5) * effectiveZoom};
+		};
+
+		struct RoleStyle { QColor colour; QString label; };
+		const auto styles = std::array<RoleStyle, 4>{{
+			{},                                                       // None
+			{QColor(255, 90, 90, 255),   QStringLiteral("V")},
+			{QColor(120, 220, 255, 255), QStringLiteral("K")},
+			{QColor(120, 255, 140, 255), QStringLiteral("C")},
+		}};
+
+		QFont font = painter.font();
+		font.setBold(true);
+		font.setPointSizeF(std::max(9.0, 10.0 * std::min(1.0, effectiveZoom)));
+		painter.setFont(font);
+
+		const auto rPx = std::max(8.0, 10.0 * std::min(1.0, effectiveZoom));
+
+		for (auto i = 1; i < static_cast<int>(_pickMarkers.size()); ++i) {
+			if (!_pickMarkers[i]) continue;
+			const auto vp = toViewport(_pickMarkers[i]->x(), _pickMarkers[i]->y());
+			const auto& s = styles[i];
+
+			painter.setRenderHint(QPainter::Antialiasing, true);
+			QPen pen(s.colour);
+			pen.setWidthF(2.0);
+			painter.setPen(pen);
+			painter.setBrush(Qt::NoBrush);
+			painter.drawEllipse(vp, rPx, rPx);
+			// Crosshair through the centre.
+			painter.drawLine(vp + QPointF(-rPx - 4, 0), vp + QPointF(-2, 0));
+			painter.drawLine(vp + QPointF(rPx + 4, 0),  vp + QPointF( 2, 0));
+			painter.drawLine(vp + QPointF(0, -rPx - 4), vp + QPointF(0, -2));
+			painter.drawLine(vp + QPointF(0, rPx + 4),  vp + QPointF(0,  2));
+			painter.drawText(vp + QPointF(rPx + 5, -rPx - 4), s.label);
+		}
+	}
 }
 
 void ImageViewer::wheelEvent(QWheelEvent* event) {
@@ -655,6 +789,18 @@ void ImageViewer::wheelEvent(QWheelEvent* event) {
 
 void ImageViewer::mousePressEvent(QMouseEvent* event) {
 	if (event->button() == Qt::LeftButton && hasImage()) {
+		// Pick mode short-circuits panning: emit the picked position and revert.
+		if (_pickMode != PickRole::None) {
+			bool inImage = false;
+			const auto imgPos = viewportToImage(event->position(), inImage);
+			if (inImage) {
+				const auto role = _pickMode;
+				_pickMode = PickRole::None;
+				unsetCursor();
+				emit picked(imgPos, static_cast<int>(role));
+			}
+			return;
+		}
 		// Begin pan
 		_panning = true;
 		_panAnchor = event->pos();

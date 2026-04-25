@@ -62,10 +62,12 @@ private slots:
 	void overlayVariableStars();
 	void overlaySimbadObjects();
 	void overlayVizierGaia();
+	void overlayAsteroids();
 	void saveFile();
 	void saveFileAs();
 	void inspectImage();
 	void openPhotometryDialog();
+	void openAavsoDialog();
 	void openSqmDialog();
 	void openFocusDialog();
 	void openPreferences();
@@ -88,6 +90,7 @@ private:
 	void ensureLogWindow();
 
 	std::unique_ptr<Ui::MainWindow> _ui;
+	class AavsoDialog* _aavsoDialog = nullptr;
 	class AstrometryNetDialog* _astrometryNetDialog = nullptr;
 	class LogWindow* _logWindow = nullptr;
 	class StackWindow* _stackWindow = nullptr;

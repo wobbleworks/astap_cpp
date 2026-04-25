@@ -7,6 +7,7 @@
 ///----------------------------------------
 
 #include "main_window.h"
+#include "aavso_dialog.h"
 #include "annotation_scanner.h"
 #include "astrometry_net_dialog.h"
 #include "controls_panel.h"
@@ -27,6 +28,7 @@
 #include "../../src/core/fits.h"
 #include "../../src/core/globals.h"
 #include "../../src/core/image_io.h"
+#include "../../src/analysis/asteroid_overlay.h"
 #include "../../src/core/online.h"
 #include "../../src/core/wcs.h"
 #include "../../src/image/tiff.h"
@@ -126,7 +128,9 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionVariableStars, &QAction::triggered, this, &MainWindow::overlayVariableStars);
 	connect(_ui->actionSimbadObjects, &QAction::triggered, this, &MainWindow::overlaySimbadObjects);
 	connect(_ui->actionVizierGaia, &QAction::triggered, this, &MainWindow::overlayVizierGaia);
+	connect(_ui->actionAsteroids, &QAction::triggered, this, &MainWindow::overlayAsteroids);
 	connect(_ui->actionPhotometry, &QAction::triggered, this, &MainWindow::openPhotometryDialog);
+	connect(_ui->actionAavsoReport, &QAction::triggered, this, &MainWindow::openAavsoDialog);
 	connect(_ui->actionSqm, &QAction::triggered, this, &MainWindow::openSqmDialog);
 	connect(_ui->actionFocus, &QAction::triggered, this, &MainWindow::openFocusDialog);
 	connect(_ui->actionPreferences, &QAction::triggered, this, &MainWindow::openPreferences);
@@ -174,6 +178,7 @@ MainWindow::MainWindow(QWidget* parent) :
 		_ui->imageViewer->clearVarStars();
 		_ui->imageViewer->clearSimbadObjects();
 		_ui->imageViewer->clearVizierStars();
+		_ui->imageViewer->clearAsteroids();
 	});
 
 	connect(_ui->actionZoomIn, &QAction::triggered,
@@ -819,6 +824,33 @@ void MainWindow::openPhotometryDialog() {
 	_photometryDialog->activateWindow();
 }
 
+void MainWindow::openAavsoDialog() {
+	if (!_ui->imageViewer->hasImage()) {
+		QMessageBox::information(this, tr("AAVSO Report"),
+			tr("Open an image first."));
+		return;
+	}
+	if (astap::head.cd1_1 == 0.0) {
+		QMessageBox::information(this, tr("AAVSO Report"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (astap::head.mzero == 0.0) {
+		const auto answer = QMessageBox::question(this, tr("AAVSO Report"),
+			tr("Photometric calibration has not been run on this image, "
+			   "so MZERO is unset and magnitudes can't be computed.\n\n"
+			   "Open the AAVSO dialog anyway?"),
+			QMessageBox::Yes | QMessageBox::No);
+		if (answer != QMessageBox::Yes) return;
+	}
+	if (!_aavsoDialog) {
+		_aavsoDialog = new AavsoDialog(this, _ui->imageViewer);
+	}
+	_aavsoDialog->show();
+	_aavsoDialog->raise();
+	_aavsoDialog->activateWindow();
+}
+
 void MainWindow::openSqmDialog() {
 	if (!_ui->imageViewer->hasImage()) {
 		QMessageBox::information(this, tr("Sky Quality Meter"),
@@ -1049,6 +1081,61 @@ void MainWindow::overlayVizierGaia() {
 	const auto n = markers.size();
 	_ui->imageViewer->setVizierStars(std::move(markers));
 	statusBar()->showMessage(tr("%1 Vizier Gaia stars overlaid").arg(n));
+}
+
+void MainWindow::overlayAsteroids() {
+	if (astap::head.cdelt2 == 0.0) {
+		QMessageBox::information(this, tr("Asteroids & Comets"),
+			tr("Plate-solve the image first (Image → Plate Solve)."));
+		return;
+	}
+	if (!_ui->imageViewer->asteroids().empty()) {
+		_ui->imageViewer->clearAsteroids();
+		statusBar()->showMessage(tr("Asteroid overlay cleared"));
+		return;
+	}
+
+	QSettings settings;
+	auto mpcorbPath  = settings.value("asteroid/mpcorb_path").toString();
+	auto cometsPath  = settings.value("asteroid/comets_path").toString();
+
+	// Prompt if we don't have an MPCORB path yet.
+	if (mpcorbPath.isEmpty() || !QFileInfo::exists(mpcorbPath)) {
+		const auto picked = QFileDialog::getOpenFileName(this,
+			tr("Locate MPCORB.DAT"),
+			QString{},
+			tr("Asteroid catalogs (*.DAT *.dat);;All files (*)"));
+		if (picked.isEmpty()) return;
+		mpcorbPath = picked;
+		settings.setValue("asteroid/mpcorb_path", mpcorbPath);
+	}
+
+	astap::analysis::AsteroidScanOptions opts;
+	opts.mpcorb_path = std::filesystem::path(mpcorbPath.toStdString());
+	if (!cometsPath.isEmpty() && QFileInfo::exists(cometsPath)) {
+		opts.comets_path = std::filesystem::path(cometsPath.toStdString());
+	}
+	opts.max_magnitude = settings.value("asteroid/max_magnitude", 18.0).toDouble();
+	opts.max_count     = settings.value("asteroid/max_count", 1500000).toInt();
+
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	const auto detections = astap::analysis::scan_asteroids_in_field(astap::head, opts);
+	auto markers = project_asteroids(detections, astap::head);
+	QGuiApplication::restoreOverrideCursor();
+
+	if (markers.empty()) {
+		QMessageBox::information(this, tr("Asteroids & Comets"),
+			tr("No asteroids or comets brighter than %1 mag fall in this field.\n\n"
+			   "(If you expected hits, verify the MPCORB.DAT path under "
+			   "Settings → Preferences, or increase the magnitude limit in "
+			   "asteroid/max_magnitude.)")
+				.arg(opts.max_magnitude, 0, 'f', 1));
+		return;
+	}
+
+	const auto n = markers.size();
+	_ui->imageViewer->setAsteroids(std::move(markers));
+	statusBar()->showMessage(tr("%1 asteroid/comet markers overlaid").arg(n));
 }
 
 void MainWindow::showSolverLog() {

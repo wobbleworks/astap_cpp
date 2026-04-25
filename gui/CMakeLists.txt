@@ -92,6 +92,8 @@ set(GUI_SOURCES
 	src/qt_http_client.h
 	src/astrometry_net_dialog.cpp
 	src/astrometry_net_dialog.h
+	src/aavso_dialog.cpp
+	src/aavso_dialog.h
 )
 
 # ---- Target -----------------------------------------------------------------

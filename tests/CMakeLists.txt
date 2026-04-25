@@ -163,6 +163,10 @@ astap_add_test(inspector_test
     "${ASTAP_SRC}/analysis/inspector.cpp"
 )
 
+astap_add_test(aavso_report_test
+    "${ASTAP_SRC}/core/aavso_report.cpp"
+)
+
 # ---- CLI integration test (spawns the astap binary) -------------------------
 
 # Only register the CLI test if the binary has been built. Pass its absolute

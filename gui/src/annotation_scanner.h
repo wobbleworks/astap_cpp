@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include "../../src/analysis/asteroid_overlay.h"
 #include "../../src/core/online.h"
 #include "../../src/types.h"
 
@@ -199,6 +200,30 @@ struct VizierMarker {
 
 [[nodiscard]] std::vector<VizierMarker> project_vizier(
     const std::vector<astap::core::VizierObject>& rows,
+    const astap::Header& head);
+
+///----------------------------------------
+/// @struct AsteroidMarker
+/// @brief A minor planet or comet projected into pixel coordinates.
+///----------------------------------------
+
+struct AsteroidMarker {
+	QString label;      ///< Designation + (optionally) magnitude.
+	double x = 0.0;     ///< FITS pixel, 1-based
+	double y = 0.0;
+	bool isComet = false;
+	bool outdated = false;
+};
+
+///----------------------------------------
+/// @brief Project asteroid/comet detections into pixel space.
+/// @param detections Result of @ref astap::analysis::scan_asteroids_in_field.
+/// @param head FITS header with a valid WCS solution.
+/// @return Markers inside the image bounds.
+///----------------------------------------
+
+[[nodiscard]] std::vector<AsteroidMarker> project_asteroids(
+    const std::vector<astap::analysis::AsteroidDetection>& detections,
     const astap::Header& head);
 
 } // namespace astap::gui

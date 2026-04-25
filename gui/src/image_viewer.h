@@ -32,6 +32,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -183,6 +184,29 @@ public:
 	void setVizierStars(std::vector<VizierMarker> markers);
 	void clearVizierStars();
 	[[nodiscard]] const std::vector<VizierMarker>& vizierStars() const noexcept { return _vizierStars; }
+
+	/// @brief Install an asteroid/comet overlay.
+	void setAsteroids(std::vector<AsteroidMarker> markers);
+	void clearAsteroids();
+	[[nodiscard]] const std::vector<AsteroidMarker>& asteroids() const noexcept { return _asteroids; }
+
+	/// @name Click-to-pick mode (manual photometry)
+	///@{
+	enum class PickRole { None = 0, Variable = 1, Check = 2, Comp = 3 };
+
+	/// @brief Enter (or exit, with @c None) a click-to-pick mode. While
+	///        active, the next left-click emits @ref picked and the mode
+	///        reverts to @c None. Panning is suppressed during pick mode.
+	void setPickMode(PickRole role);
+
+	[[nodiscard]] PickRole pickMode() const noexcept { return _pickMode; }
+
+	/// @brief Show or clear the per-role marker on the canvas. Pass
+	///        @c std::nullopt to remove the marker for that role.
+	void setPickMarker(PickRole role, std::optional<QPointF> imagePos);
+
+	/// @brief Remove every pick marker.
+	void clearPickMarkers();
 	///@}
 
 	/// @name Saturation
@@ -205,6 +229,11 @@ signals:
 	/// @param imagePos FITS pixel position (valid when @p inImage is true).
 	/// @param inImage True if the cursor is over the image, false off-image.
 	void cursorMoved(QPointF imagePos, bool inImage);
+
+	/// @brief Emitted when the user left-clicks during pick mode.
+	/// @param imagePos FITS pixel position (1-based, y up).
+	/// @param role     The @ref PickRole that was active (cast to int).
+	void picked(QPointF imagePos, int role);
 
 protected:
 	void paintEvent(QPaintEvent* event) override;
@@ -259,7 +288,13 @@ private:
 	std::vector<VarStarMarker> _varStars;
 	std::vector<SimbadMarker> _simbadObjects;
 	std::vector<VizierMarker> _vizierStars;
+	std::vector<AsteroidMarker> _asteroids;
 	ConstellationOverlay _constellations;
+
+	// Manual photometry click-to-pick state. Index 0 unused (PickRole::None);
+	// indices 1..3 correspond to Variable / Check / Comp.
+	PickRole _pickMode = PickRole::None;
+	std::array<std::optional<QPointF>, 4> _pickMarkers{};
 };
 
 } // namespace astap::gui

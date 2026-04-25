@@ -547,4 +547,34 @@ std::vector<VizierMarker> project_vizier(
 	return out;
 }
 
+std::vector<AsteroidMarker> project_asteroids(
+		const std::vector<astap::analysis::AsteroidDetection>& detections,
+		const astap::Header& head) {
+	auto out = std::vector<AsteroidMarker>{};
+	if (head.naxis == 0 || head.cd1_1 == 0.0) {
+		return out;
+	}
+	out.reserve(detections.size());
+
+	for (const auto& d : detections) {
+		auto px = 0.0, py = 0.0;
+		astap::core::celestial_to_pixel(head, d.ra, d.dec, px, py);
+		if (!inFrame(head, px, py)) continue;
+
+		auto m = AsteroidMarker{};
+		// Prefer the full name if present, fall back to the packed designation.
+		const auto base = d.name.empty() ? d.desn : d.name;
+		m.label = QString::fromStdString(base)
+		        + QStringLiteral(" {")
+		        + QString::number(d.magnitude, 'f', 1)
+		        + QStringLiteral("}");
+		m.x = px;
+		m.y = py;
+		m.isComet = d.is_comet;
+		m.outdated = d.outdated;
+		out.push_back(std::move(m));
+	}
+	return out;
+}
+
 } // namespace astap::gui
