@@ -81,6 +81,13 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     runs-on: windows-2022
+    # Opt in to the Node 24 JavaScript-action runtime ahead of the June 2026
+    # cutover. ilammy/msvc-dev-cmd@v1 still ships its action.yml pinned to
+    # Node 20; this env var forces the runner to execute it under Node 24
+    # so we surface any incompatibility early. Drop once that action ships
+    # a Node-24-aware release.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -104,9 +111,11 @@ jobs:
           cache: true
 
       - name: Set up MSVC developer shell
-        # ilammy/msvc-dev-cmd is still on Node 20 as of April 2026. The
-        # runner logs a deprecation warning until a Node 24 release ships.
-        # Safe to leave pinned on @v1 until then.
+        # ilammy/msvc-dev-cmd@v1's action.yml still declares runs.using:
+        # "node20" as of Apr 2026. The job-level FORCE_JAVASCRIPT_ACTIONS_TO_NODE24
+        # env var forces the runner to execute it under Node 24 so we
+        # surface any incompatibility before GitHub flips the default in
+        # June 2026.
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure (library + CLI + GUI)
