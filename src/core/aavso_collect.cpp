@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <string>
 
 ///----------------------------------------
@@ -175,7 +176,7 @@ std::optional<double> find_vsp_magnitude(std::string_view filter_band,
 	if (vsp.empty()) return std::nullopt;
 
 	const auto cos_dec = std::cos(dec);
-	const auto max_rad = max_arcsec * (M_PI / (180.0 * 3600.0));
+	const auto max_rad = max_arcsec * (std::numbers::pi / (180.0 * 3600.0));
 
 	auto best_idx  = std::size_t{0};
 	auto best_dist = std::numeric_limits<double>::infinity();
