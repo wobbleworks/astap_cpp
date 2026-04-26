@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_ROOT="$SCRIPT_DIR"
+BUILD_DIR="$SCRIPT_DIR/build"
+
+cmake -S "$SOURCE_ROOT" -B "$BUILD_DIR" \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DASTAP_BUILD_CLI=ON \
+	-DASTAP_BUILD_GUI=OFF
+
+cmake --build "$BUILD_DIR" --config Release --target astap --parallel
+
+echo "Wrote $BUILD_DIR/astap"

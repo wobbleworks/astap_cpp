@@ -647,7 +647,7 @@ bool convert_raw(bool         loadfile,
         } else {
             // Pass the long path through; let the platform layer handle quoting.
             const std::string cmd = exe.string() + " " + param + " \"" + filename3 + "\"";
-            execute_and_wait(cmd, false);
+            (void) execute_and_wait(cmd, false);
             filename4 = filename3 + ".fits";
         }
 #elif defined(__APPLE__)
@@ -655,7 +655,7 @@ bool convert_raw(bool         loadfile,
         if (!fs::exists(exe)) {
             result = false;
         } else {
-            execute_and_wait(exe.string() + " " + param + " \"" + filename3 + "\"", false);
+            (void) execute_and_wait(exe.string() + " " + param + " \"" + filename3 + "\"", false);
             filename4 = filename3 + ".fits";
         }
 #else  // Linux
@@ -665,15 +665,15 @@ bool convert_raw(bool         loadfile,
                 if (!fs::exists("/usr/bin/unprocessed_raw")) {
                     result = false;
                 } else {
-                    execute_and_wait("/usr/bin/unprocessed_raw \"" + filename3 + "\"", false);
+                    (void) execute_and_wait("/usr/bin/unprocessed_raw \"" + filename3 + "\"", false);
                     filename4 = filename3 + ".pgm";
                 }
             } else {
-                execute_and_wait("/usr/lib/libraw/unprocessed_raw \"" + filename3 + "\"", false);
+                (void) execute_and_wait("/usr/lib/libraw/unprocessed_raw \"" + filename3 + "\"", false);
                 filename4 = filename3 + ".pgm";
             }
         } else {
-            execute_and_wait(local_exe.string() + " " + param + " \"" + filename3 + "\"", false);
+            (void) execute_and_wait(local_exe.string() + " " + param + " \"" + filename3 + "\"", false);
             filename4 = filename3 + ".fits";
         }
 #endif
@@ -689,14 +689,14 @@ bool convert_raw(bool         loadfile,
         if (!fs::exists(exe)) {
             result = false;
         } else {
-            execute_and_wait(exe.string() + " " + commando + " \"" + filename3 + "\"", false);
+            (void) execute_and_wait(exe.string() + " " + commando + " \"" + filename3 + "\"", false);
         }
 #elif defined(__APPLE__)
         const auto exe = application_path / "dcraw";
         if (!fs::exists(exe)) {
             result = false;
         } else {
-            execute_and_wait(exe.string() + " " + commando + " \"" + filename3 + "\"", false);
+            (void) execute_and_wait(exe.string() + " " + commando + " \"" + filename3 + "\"", false);
         }
 #else  // Linux
         const auto local_exe = application_path / "dcraw-astap";
@@ -707,19 +707,19 @@ bool convert_raw(bool         loadfile,
                         if (!fs::exists("/usr/local/bin/dcraw")) {
                             result = false;
                         } else {
-                            execute_and_wait("/usr/local/bin/dcraw " + commando + " \"" + filename3 + "\"", false);
+                            (void) execute_and_wait("/usr/local/bin/dcraw " + commando + " \"" + filename3 + "\"", false);
                         }
                     } else {
-                        execute_and_wait("/usr/bin/dcraw " + commando + " \"" + filename3 + "\"", false);
+                        (void) execute_and_wait("/usr/bin/dcraw " + commando + " \"" + filename3 + "\"", false);
                     }
                 } else {
-                    execute_and_wait("/usr/local/bin/dcraw-astap " + commando + " \"" + filename3 + "\"", false);
+                    (void) execute_and_wait("/usr/local/bin/dcraw-astap " + commando + " \"" + filename3 + "\"", false);
                 }
             } else {
-                execute_and_wait("/usr/bin/dcraw-astap " + commando + " \"" + filename3 + "\"", false);
+                (void) execute_and_wait("/usr/bin/dcraw-astap " + commando + " \"" + filename3 + "\"", false);
             }
         } else {
-            execute_and_wait(local_exe.string() + " " + commando + " \"" + filename3 + "\"", false);
+            (void) execute_and_wait(local_exe.string() + " " + commando + " \"" + filename3 + "\"", false);
         }
 #endif
         

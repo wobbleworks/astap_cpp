@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_ROOT="$SCRIPT_DIR"
+BUILD_DIR="$SCRIPT_DIR/build-gui"
+
+cmake -S "$SOURCE_ROOT" -B "$BUILD_DIR" \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DASTAP_BUILD_CLI=OFF \
+	-DASTAP_BUILD_GUI=ON
+
+cmake --build "$BUILD_DIR" --config Release --target astap_gui --parallel
+
+if [[ -d "$BUILD_DIR/gui/ASTAP.app" ]]; then
+	echo "Wrote $BUILD_DIR/gui/ASTAP.app"
+else
+	echo "Wrote $BUILD_DIR/gui/astap_gui"
+fi
