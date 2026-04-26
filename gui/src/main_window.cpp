@@ -31,6 +31,7 @@
 #include "../../src/analysis/asteroid_overlay.h"
 #include "../../src/core/online.h"
 #include "../../src/core/wcs.h"
+#include "../../src/image/local_corrections.h"
 #include "../../src/image/tiff.h"
 #include "../../src/reference/star_database.h"
 #include "../../src/solving/astrometric_solving.h"
@@ -134,6 +135,12 @@ MainWindow::MainWindow(QWidget* parent) :
 	connect(_ui->actionSqm, &QAction::triggered, this, &MainWindow::openSqmDialog);
 	connect(_ui->actionFocus, &QAction::triggered, this, &MainWindow::openFocusDialog);
 	connect(_ui->actionPreferences, &QAction::triggered, this, &MainWindow::openPreferences);
+	connect(_ui->actionGradientRemoval, &QAction::triggered,
+		this, &MainWindow::startGradientRemoval);
+	connect(_ui->actionDustSpotRemoval, &QAction::triggered,
+		this, &MainWindow::startDustSpotRemoval);
+	connect(_ui->imageViewer, &ImageViewer::selectionMade,
+		this, &MainWindow::onSelectionMade);
 	connect(_ui->actionStack, &QAction::triggered, this, [this]() {
 		if (!_stackWindow) {
 			_stackWindow = new StackWindow(this);
@@ -887,6 +894,72 @@ void MainWindow::openPreferences() {
 	if (dlg.exec() == QDialog::Accepted) {
 		// Refresh the recent-files menu in case it was cleared.
 		rebuildRecentMenu();
+	}
+}
+
+void MainWindow::startGradientRemoval() {
+	if (astap::head.naxis == 0 || astap::img_loaded.empty()) {
+		QMessageBox::information(this, tr("Gradient Removal"),
+			tr("Open an image first."));
+		return;
+	}
+	_ui->imageViewer->setSelectionMode(ImageViewer::SelectionMode::Line);
+	statusBar()->showMessage(tr(
+		"Gradient Removal: drag from a dark area to a bright area "
+		"(at least 100 pixels apart). Try to avoid deep-sky objects "
+		"within ~20 px of either endpoint."), 8000);
+}
+
+void MainWindow::startDustSpotRemoval() {
+	if (astap::head.naxis == 0 || astap::img_loaded.empty()) {
+		QMessageBox::information(this, tr("Dust Spot Removal"),
+			tr("Open an image first."));
+		return;
+	}
+	_ui->imageViewer->setSelectionMode(ImageViewer::SelectionMode::Rect);
+	statusBar()->showMessage(tr(
+		"Dust Spot Removal: drag a rectangle around the spot. The fill "
+		"is taken from a 20-pixel margin around the rectangle."), 8000);
+}
+
+void MainWindow::onSelectionMade(QPointF start, QPointF end, int modeInt) {
+	const auto mode = static_cast<ImageViewer::SelectionMode>(modeInt);
+	const auto x1 = static_cast<int>(std::lround(start.x()));
+	const auto y1 = static_cast<int>(std::lround(start.y()));
+	const auto x2 = static_cast<int>(std::lround(end.x()));
+	const auto y2 = static_cast<int>(std::lround(end.y()));
+
+	if (mode == ImageViewer::SelectionMode::Line) {
+		QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+		const auto ok = astap::image::remove_linear_gradient(
+			astap::img_loaded, astap::head, x1, y1, x2, y2);
+		QGuiApplication::restoreOverrideCursor();
+		if (!ok) {
+			QMessageBox::information(this, tr("Gradient Removal"),
+				tr("The two anchors are too close (need ≥ 100 pixels apart). "
+				   "Try again."));
+			return;
+		}
+		_ui->imageViewer->setImage(astap::img_loaded, astap::head);
+		statusBar()->showMessage(tr("Gradient subtracted."), 5000);
+	} else if (mode == ImageViewer::SelectionMode::Rect) {
+		QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+		// Hold Ctrl while clicking the menu / drag to clip to an inscribed
+		// ellipse — matches the Pascal CtrlButton flag. We pick that off the
+		// current keyboard modifiers at the moment of release.
+		const auto useEllipse =
+			(QGuiApplication::keyboardModifiers() & Qt::ControlModifier);
+		const auto ok = astap::image::remove_dust_spot(
+			astap::img_loaded, astap::head, x1, y1, x2, y2, useEllipse);
+		QGuiApplication::restoreOverrideCursor();
+		if (!ok) {
+			QMessageBox::information(this, tr("Dust Spot Removal"),
+				tr("The selected box is too small. Drag a wider rectangle."));
+			return;
+		}
+		_ui->imageViewer->setImage(astap::img_loaded, astap::head);
+		statusBar()->showMessage(tr("Dust spot filled%1.").arg(
+			useEllipse ? tr(" (ellipse)") : QString{}), 5000);
 	}
 }
 

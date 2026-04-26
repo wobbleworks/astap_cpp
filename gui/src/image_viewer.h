@@ -209,6 +209,19 @@ public:
 	void clearPickMarkers();
 	///@}
 
+	/// @name Drag-selection mode (gradient / dust-spot tools)
+	///@{
+	enum class SelectionMode { None, Line, Rect };
+
+	/// @brief Enter (or exit, with @c None) a drag-selection mode. While
+	///        active, the next left-button drag draws a rubber-band overlay
+	///        instead of panning; on release @ref selectionMade fires once
+	///        and the mode reverts to @c None.
+	void setSelectionMode(SelectionMode mode);
+
+	[[nodiscard]] SelectionMode selectionMode() const noexcept { return _selectionMode; }
+	///@}
+
 	/// @name Saturation
 	///@{
 	[[nodiscard]] float saturation() const noexcept { return _saturation; }
@@ -234,6 +247,12 @@ signals:
 	/// @param imagePos FITS pixel position (1-based, y up).
 	/// @param role     The @ref PickRole that was active (cast to int).
 	void picked(QPointF imagePos, int role);
+
+	/// @brief Emitted when a drag-selection ends.
+	/// @param start    Drag start point in 1-based FITS pixel coords.
+	/// @param end      Drag end point in 1-based FITS pixel coords.
+	/// @param mode     The @ref SelectionMode that was active (cast to int).
+	void selectionMade(QPointF start, QPointF end, int mode);
 
 protected:
 	void paintEvent(QPaintEvent* event) override;
@@ -295,6 +314,12 @@ private:
 	// indices 1..3 correspond to Variable / Check / Comp.
 	PickRole _pickMode = PickRole::None;
 	std::array<std::optional<QPointF>, 4> _pickMarkers{};
+
+	// Drag-selection state for gradient / dust-spot tools.
+	SelectionMode _selectionMode = SelectionMode::None;
+	bool _selecting = false;
+	QPointF _selStart;     // image-space, 1-based
+	QPointF _selCurrent;   // image-space, 1-based; tracks the pointer during drag
 };
 
 } // namespace astap::gui

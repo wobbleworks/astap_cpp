@@ -119,6 +119,13 @@
     <addaction name="actionStack"/>
     <addaction name="actionLiveStack"/>
    </widget>
+   <widget class="QMenu" name="menuTools">
+    <property name="title">
+     <string>&amp;Tools</string>
+    </property>
+    <addaction name="actionGradientRemoval"/>
+    <addaction name="actionDustSpotRemoval"/>
+   </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
      <string>&amp;Help</string>
@@ -128,6 +135,7 @@
    <addaction name="menuFile"/>
    <addaction name="menuView"/>
    <addaction name="menuImage"/>
+   <addaction name="menuTools"/>
    <addaction name="menuHelp"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
@@ -344,6 +352,22 @@
   <action name="actionFocus">
    <property name="text">
     <string>&amp;Focus V-Curve Fit…</string>
+   </property>
+  </action>
+  <action name="actionGradientRemoval">
+   <property name="text">
+    <string>&amp;Gradient Removal…</string>
+   </property>
+   <property name="toolTip">
+    <string>Drag from a dark area to a bright area to subtract a linear gradient.</string>
+   </property>
+  </action>
+  <action name="actionDustSpotRemoval">
+   <property name="text">
+    <string>&amp;Dust Spot Removal…</string>
+   </property>
+   <property name="toolTip">
+    <string>Drag a rectangle around a dust spot to fill it from its surroundings.</string>
    </property>
   </action>
   <action name="actionPreferences">

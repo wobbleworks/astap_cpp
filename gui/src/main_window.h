@@ -71,6 +71,9 @@ private slots:
 	void openSqmDialog();
 	void openFocusDialog();
 	void openPreferences();
+	void startGradientRemoval();
+	void startDustSpotRemoval();
+	void onSelectionMade(QPointF start, QPointF end, int mode);
 
 protected:
 	void closeEvent(QCloseEvent* event) override;

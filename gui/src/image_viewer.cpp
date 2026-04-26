@@ -197,6 +197,17 @@ void ImageViewer::clearPickMarkers() {
 	update();
 }
 
+void ImageViewer::setSelectionMode(SelectionMode mode) {
+	_selectionMode = mode;
+	_selecting = false;
+	if (mode == SelectionMode::None) {
+		unsetCursor();
+	} else {
+		setCursor(Qt::CrossCursor);
+	}
+	update();  // erase any leftover rubber band
+}
+
 void ImageViewer::clearConstellations() {
 	_constellations.lines.clear();
 	_constellations.labels.clear();
@@ -754,6 +765,30 @@ void ImageViewer::paintEvent(QPaintEvent* event) {
 			painter.drawLine(vp + QPointF(0, rPx + 4),  vp + QPointF(0,  2));
 			painter.drawText(vp + QPointF(rPx + 5, -rPx - 4), s.label);
 		}
+
+		// Rubber-band overlay during selection-mode drag. Reuses toViewport
+		// from this same scope so all the flip/zoom math stays in one place.
+		if (_selecting) {
+			painter.setRenderHint(QPainter::Antialiasing, true);
+			const auto a = toViewport(_selStart.x(),   _selStart.y());
+			const auto b = toViewport(_selCurrent.x(), _selCurrent.y());
+			auto pen = QPen(QColor(255, 220, 80, 230));
+			pen.setWidthF(1.5);
+			pen.setStyle(Qt::DashLine);
+			painter.setPen(pen);
+			painter.setBrush(Qt::NoBrush);
+			if (_selectionMode == SelectionMode::Rect) {
+				painter.drawRect(QRectF(a, b).normalized());
+			} else if (_selectionMode == SelectionMode::Line) {
+				painter.drawLine(a, b);
+				pen.setStyle(Qt::SolidLine);
+				painter.setPen(pen);
+				painter.setBrush(QColor(40, 40, 40, 160));
+				painter.drawEllipse(a, 4.0, 4.0);
+				painter.setBrush(QColor(255, 255, 255, 200));
+				painter.drawEllipse(b, 4.0, 4.0);
+			}
+		}
 	}
 }
 
@@ -801,6 +836,18 @@ void ImageViewer::mousePressEvent(QMouseEvent* event) {
 			}
 			return;
 		}
+		// Selection mode also short-circuits panning.
+		if (_selectionMode != SelectionMode::None) {
+			bool inImage = false;
+			const auto imgPos = viewportToImage(event->position(), inImage);
+			if (inImage) {
+				_selecting = true;
+				_selStart = imgPos;
+				_selCurrent = imgPos;
+				update();
+			}
+			return;
+		}
 		// Begin pan
 		_panning = true;
 		_panAnchor = event->pos();
@@ -816,6 +863,11 @@ void ImageViewer::mouseMoveEvent(QMouseEvent* event) {
 		_fitMode = false;  // any pan exits fit mode
 		clampPan();
 		update();
+	} else if (_selecting) {
+		bool inImage = false;
+		const auto imgPos = viewportToImage(event->position(), inImage);
+		_selCurrent = imgPos;
+		update();
 	}
 
 	// Always advertise the cursor position so the host can show pixel /
@@ -830,6 +882,17 @@ void ImageViewer::mouseReleaseEvent(QMouseEvent* event) {
 		// End pan
 		_panning = false;
 		unsetCursor();
+		return;
+	}
+	if (event->button() == Qt::LeftButton && _selecting) {
+		_selecting = false;
+		const auto mode = _selectionMode;
+		_selectionMode = SelectionMode::None;
+		unsetCursor();
+		const auto start = _selStart;
+		const auto end   = _selCurrent;
+		update();
+		emit selectionMade(start, end, static_cast<int>(mode));
 	}
 }
 
