@@ -74,6 +74,12 @@ public:
 	///        recomputes histogram + auto-stretch defaults.
 	void setImage(astap::ImageArray image, astap::Header header);
 
+	/// @brief Swap in mutated pixels (same dimensions) without touching
+	///        zoom/pan, markers, annotations, flips, or stretch endpoints.
+	///        Recomputes the histogram against the new pixels and re-renders.
+	///        Used by in-place tools like gradient / dust-spot removal.
+	void refreshImagePixels(astap::ImageArray image);
+
 	/// @brief Drop the displayed image and repaint empty.
 	void clear();
 

@@ -940,7 +940,7 @@ void MainWindow::onSelectionMade(QPointF start, QPointF end, int modeInt) {
 				   "Try again."));
 			return;
 		}
-		_ui->imageViewer->setImage(astap::img_loaded, astap::head);
+		_ui->imageViewer->refreshImagePixels(astap::img_loaded);
 		statusBar()->showMessage(tr("Gradient subtracted."), 5000);
 	} else if (mode == ImageViewer::SelectionMode::Rect) {
 		QGuiApplication::setOverrideCursor(Qt::WaitCursor);
@@ -957,7 +957,7 @@ void MainWindow::onSelectionMade(QPointF start, QPointF end, int modeInt) {
 				tr("The selected box is too small. Drag a wider rectangle."));
 			return;
 		}
-		_ui->imageViewer->setImage(astap::img_loaded, astap::head);
+		_ui->imageViewer->refreshImagePixels(astap::img_loaded);
 		statusBar()->showMessage(tr("Dust spot filled%1.").arg(
 			useEllipse ? tr(" (ellipse)") : QString{}), 5000);
 	}

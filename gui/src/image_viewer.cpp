@@ -101,6 +101,27 @@ void ImageViewer::setImage(astap::ImageArray image, astap::Header header) {
 	emit flipChanged();
 }
 
+void ImageViewer::refreshImagePixels(astap::ImageArray image) {
+	// In-place edit: keep view (zoom/pan/fitMode), markers, flips, and the
+	// user's stretch endpoints. Recompute histogram for the new pixels.
+	_renderTimer.stop();
+
+	_image = std::move(image);
+
+	// computeStatistics() resets _stretchLo/_stretchHi to full range; save
+	// and restore so the user's current stretch survives the refresh.
+	const auto savedStretchLo = _stretchLo;
+	const auto savedStretchHi = _stretchHi;
+	computeStatistics();
+	_stretchLo = savedStretchLo;
+	_stretchHi = savedStretchHi;
+
+	renderImage();
+	update();
+
+	emit stretchChanged();
+}
+
 void ImageViewer::setStarMarkers(std::vector<DetectedStar> stars) {
 	_stars = std::move(stars);
 	update();
