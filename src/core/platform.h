@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -110,6 +111,31 @@ void log_to_file(const std::string& logf, const std::string& mess);
 void log_to_file2(const std::string& logf, const std::string& mess);
 
 /// MARK: - Progress / Status Sink
+
+///----------------------------------------
+/// @brief Sink for solver/analysis log messages (the original's memo2).
+///----------------------------------------
+
+using MemoSink = std::function<void(const std::string&)>;
+
+///----------------------------------------
+/// @brief Install the process-wide sink for @ref memo2_message. Pass a null
+///        function to uninstall. The CLI installs a sink that writes to the
+///        console; the GUI installs one that appends to its log view.
+///----------------------------------------
+
+void set_memo2_sink(MemoSink sink);
+
+///----------------------------------------
+/// @brief Emit a solver/analysis progress message through the installed sink.
+/// @details This is the single, canonical memo2_message for the whole library,
+///          mirroring the original's global memo2_message. It never touches
+///          memo1 (the FITS-header memo written to .wcs/.ini). With no sink
+///          installed it is a no-op. The string_view signature accepts string
+///          literals and std::string alike, so one overload serves everyone.
+///----------------------------------------
+
+void memo2_message(std::string_view msg);
 
 ///----------------------------------------
 /// @brief Emit a progress update to stderr.

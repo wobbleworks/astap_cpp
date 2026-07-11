@@ -213,3 +213,25 @@ if(EXISTS "${ASTAP_CLI_BIN}")
 else()
 	message(STATUS "CLI binary not found — skipping differential_analyse_test.")
 endif()
+
+# ---- Differential solve test (needs the shared star database) ---------------
+
+#   ASTAP_DB_DIR  shared star database (default: /usr/local/opt/astap)
+if(NOT DEFINED ASTAP_DB_DIR OR ASTAP_DB_DIR STREQUAL "")
+	set(ASTAP_DB_DIR "/usr/local/opt/astap")
+endif()
+
+if(EXISTS "${ASTAP_CLI_BIN}")
+	add_executable(differential_solve_test differential_solve_test.cpp)
+	target_include_directories(differential_solve_test PRIVATE "${ASTAP_DOCTEST_HEADERS}")
+	target_compile_definitions(differential_solve_test PRIVATE
+		ASTAP_BIN_PATH="${ASTAP_CLI_BIN}"
+		ASTAP_ORACLE_BIN="${ASTAP_ORACLE_BIN}"
+		ASTAP_CORPUS_DIR="${ASTAP_CORPUS_DIR}"
+		ASTAP_DB_DIR="${ASTAP_DB_DIR}")
+	target_compile_features(differential_solve_test PRIVATE cxx_std_23)
+	add_test(NAME differential_solve_test COMMAND differential_solve_test)
+	message(STATUS "differential_solve_test: db=${ASTAP_DB_DIR}")
+else()
+	message(STATUS "CLI binary not found — skipping differential_solve_test.")
+endif()

@@ -596,6 +596,17 @@ int main(int argc, char* argv[]) {
     // (stack_live, solver sweeps) can quit cleanly.
     (void)astap::core::install_cancel_signal_handler();
 
+    // Install the command-line memo2 sink: solver/analysis progress goes to the
+    // console (as the original's memo2_message does in command-line mode), and
+    // into memo2_lines for the -log file. This is the single sink the whole
+    // library routes through; the GUI installs its own instead.
+    astap::core::set_memo2_sink([](const std::string& msg) {
+        std::cout << msg << '\n';
+        if (astap::commandline_log) {
+            astap::memo2_lines.push_back(msg);
+        }
+    });
+
     // 1) PlateSolve2-style positional argv. platesolve2_command() inspects
     //    argv itself and returns true if it consumed the command (writing
     //    its own .apm output and setting errorlevel before returning).

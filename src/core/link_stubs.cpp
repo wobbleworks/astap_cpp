@@ -165,9 +165,7 @@ void analyse_image(const ImageArray& /*img*/,
     hfd_median = 0.0;
 }
 
-// memo2_message: two call-signatures exist in the port. Provide both.
-void memo2_message(std::string_view /*msg*/) {}
-void memo2_message(const std::string& /*msg*/) {}
+// memo2_message now lives in platform.cpp (routes to the installed sink).
 
 // raster_rotate overload with (angle, cx, cy, img) — real one is in
 // astap::stacking with the same signature but different namespace.

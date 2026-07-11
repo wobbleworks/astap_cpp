@@ -21,6 +21,7 @@
 #include "../core/globals.h"
 #include "../core/imaging.h"
 #include "../core/photometry.h"
+#include "../core/platform.h"
 #include "../core/util.h"
 #include "../core/wcs.h"
 #include "../solving/star_align.h"
@@ -67,7 +68,7 @@ using astap::core::strtoint2;
 void demosaic_bayer(ImageArray& img);
 
 // UI / progress (TODO: replace with ProgressReporter).
-void memo2_message(const std::string& msg);
+void memo2_message(std::string_view msg);
 void progress_indicator(double value, const std::string& label);
 
 // ListView subitem accessors.
@@ -2653,22 +2654,22 @@ void demosaic_bayer(ImageArray& img) {
 }
 
 namespace {
-MemoSink g_memo_sink;
 ProgressSink g_progress_sink;
 }  // namespace
 
+// The memo2 sink now lives in astap::core (one process-wide sink for the whole
+// library). set_memo2_sink / memo2_message here forward to it so existing
+// astap::stacking callers (and the GUI) keep their call sites unchanged.
 void set_memo2_sink(MemoSink sink) {
-    g_memo_sink = std::move(sink);
+    astap::core::set_memo2_sink(std::move(sink));
 }
 
 void set_progress_sink(ProgressSink sink) {
     g_progress_sink = std::move(sink);
 }
 
-void memo2_message(const std::string& msg) {
-    if (g_memo_sink) {
-        g_memo_sink(msg);
-    }
+void memo2_message(std::string_view msg) {
+    astap::core::memo2_message(msg);
 }
 
 void progress_indicator(double value, const std::string& label) {

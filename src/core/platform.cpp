@@ -680,6 +680,22 @@ void save_settings(const std::string& path) {
     (void)ini.save(path);
 }
 
+/// MARK: - memo2_message sink
+
+namespace {
+MemoSink g_memo2_sink;
+}  // namespace
+
+void set_memo2_sink(MemoSink sink) {
+    g_memo2_sink = std::move(sink);
+}
+
+void memo2_message(std::string_view msg) {
+    if (g_memo2_sink) {
+        g_memo2_sink(std::string{msg});
+    }
+}
+
 /// MARK: - write_ini
 
 bool write_ini(const std::filesystem::path& filen,
@@ -693,8 +709,19 @@ bool write_ini(const std::filesystem::path& filen,
         return false;
     }
     
-    // Scientific notation formatter matching the original floattostrE
-    auto e = [](double v) { return std::format("{:e}", v); };
+    // Reproduce the original floattostrE, which is Pascal's str(x): full
+    // double precision (16 decimals), uppercase E, a leading space for
+    // non-negative values, and a minimum 3-digit exponent.
+    auto e = [](double v) {
+        auto s = std::format("{: .16E}", v);
+        const auto epos = s.find('E');
+        if (epos != std::string::npos) {
+            auto digit_pos = epos + 2;              // past 'E' and its sign
+            auto ndigits = s.size() - digit_pos;
+            while (ndigits < 3) { s.insert(digit_pos, "0"); ++ndigits; }
+        }
+        return s;
+    };
     
     const auto& head = astap::head;
     

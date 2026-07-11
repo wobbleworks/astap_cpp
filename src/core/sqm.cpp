@@ -57,7 +57,7 @@ void plot_and_measure_stars(ImageArray& img,
 void calculate_az_alt(int mode, Header& head, double& az, double& alt);
 double atmospheric_absorption(double airmass);
 
-void memo2_message(const std::string& s);
+void memo2_message(std::string_view s);   // canonical sink, defined in platform.cpp
 
 // Pull the canonical `bayerpat` from globals.h (astap namespace) into this TU
 // so calculate_sqm sees the value FITS-loader writes to. An earlier

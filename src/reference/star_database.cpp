@@ -8,6 +8,8 @@
 
 #include "star_database.h"
 
+#include "../core/platform.h"   // astap::core::memo2_message (canonical sink)
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -220,8 +222,7 @@ std::ifstream thefile_stars;
 ///----------------------------------------
 
 void memo2_message(std::string_view msg) {
-    std::fwrite(msg.data(), 1, msg.size(), stderr);
-    std::fputc('\n', stderr);
+    astap::core::memo2_message(msg);   // route to the process-wide sink
 }
 
 /// @brief Warning string set by select_star_database. TODO: migrate to the ported owner.

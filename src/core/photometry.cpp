@@ -17,6 +17,7 @@
 #include "fits.h"
 #include "globals.h"
 #include "imaging.h"
+#include "platform.h"
 #include "util.h"
 #include "wcs.h"
 
@@ -36,9 +37,7 @@ namespace astap::core {
 // Forward declarations of helpers ported in other modules.
 double Smedian(std::vector<double>& data, int n);
 
-// GUI-side hooks the original source called inline. Provide weak no-op stubs
-// so this translation unit links standalone.
-[[maybe_unused]] static void memo2_message([[maybe_unused]] const std::string& msg) {}
+// memo2_message resolves to the canonical sink (platform.h, included above).
 
 // Forward declarations from sibling modules. Stubs here so this file is
 // self-contained at the type level; the linker resolves to the real
@@ -1028,7 +1027,10 @@ void get_background(int colour,
 
     // Fall back to mean if it is much higher than the mode
     if (his_mean[colour] > 1.5 * back.backgr) {
-        memo1_lines.push_back(std::format(
+        // Progress message → the process-wide memo2 sink, matching the
+        // original's memo2_message (astap_main.pas:3049). Never into memo1
+        // (the FITS header), which the original keeps clean.
+        memo2_message(std::format(
             "{}, will use mean value {} as background rather then most common value {}",
             filename2, his_mean[colour],
             static_cast<int>(std::lround(back.backgr))));

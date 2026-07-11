@@ -34,6 +34,11 @@
 namespace astap::core {
 ///----------------------------------------
 
+// Canonical memo2 sink, defined in platform.cpp. Declared here (rather than
+// including platform.h) to avoid pulling in an unrelated progress_indicator
+// overload that would clash with this file's own declaration.
+void memo2_message(std::string_view msg);
+
 namespace {
 
 // ----- TODO: living in core/util.h ------------------------------------------
@@ -122,11 +127,6 @@ using astap::sip;
 using astap::filename2;
 using astap::head;
 std::string sqm_key = "SQM     ";  // 8 chars; adjustable in the original
-
-// ----- TODO: GUI helpers replaced with stubs --------------------------------
-void memo2_message(const std::string& /*msg*/) {
-    // TODO: route to a logging sink; the original wrote to mainwindow.memo2.
-}
 
 // ----- low-level helpers ----------------------------------------------------
 

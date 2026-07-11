@@ -34,6 +34,9 @@ using astap::jd_start;
 using astap::jd_mid;
 using astap::jd_end;
 
+// Defined in stack_routines.cpp (astap::stacking) → forwards to the core sink.
+void memo2_message(std::string_view msg);
+
 ///----------------------------------------
 /// MARK: File-local helpers
 ///----------------------------------------
@@ -145,10 +148,6 @@ void load_master_dark([[maybe_unused]] int jd, [[maybe_unused]] Header& hd) {
 
 void load_master_flat([[maybe_unused]] int jd, [[maybe_unused]] Header& hd) {
     // See load_master_dark comment — same deal for flats.
-}
-
-void memo2_message([[maybe_unused]] std::string_view msg) {
-    // TODO: GUI sink; in the algorithmic port messages are dropped.
 }
 
 ///----------------------------------------

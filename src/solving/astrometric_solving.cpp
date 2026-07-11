@@ -21,6 +21,7 @@
 #include "../core/fits.h"
 #include "../core/globals.h"
 #include "../core/photometry.h"
+#include "../core/platform.h"
 #include "../core/util.h"
 #include "../core/wcs.h"
 #include "../reference/star_database.h"
@@ -194,8 +195,12 @@ inline void sincos_d(double a, double& s, double& c) {
     c = std::cos(a);
 }
 
-inline void memo2_message(std::vector<std::string>& log, const std::string& msg) {
-    log.push_back(msg);
+inline void memo2_message(std::vector<std::string>& /*sink*/, std::string_view msg) {
+    // Route to the process-wide memo2 sink (astap::core). The vector parameter
+    // (historically memo1) is retained for call-site compatibility but is
+    // intentionally unused — routing there would pollute the FITS-header memo
+    // that is dumped verbatim to the .wcs/.ini.
+    astap::core::memo2_message(msg);
 }
 
 ///----------------------------------------

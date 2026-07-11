@@ -77,8 +77,8 @@ void HSV2RGB(float h, float s, float v, float& r, float& g, float& b);
 // Accurate raster rotation with canvas expansion.
 void raster_rotate(double angle, double cx, double cy, ImageArray& img);
 
-// GUI-side stubs.
-void memo2_message(const std::string& msg);
+// memo2_message: canonical sink defined in platform.cpp.
+void memo2_message(std::string_view msg);
 void remove_solution(bool keep_wcs);
 
 /// MARK: Module-level state
