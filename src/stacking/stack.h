@@ -231,6 +231,10 @@ void resize_img_loaded(double ratio);
 /// @param[out] star_counter Number of accepted stars.
 /// @param[out] bck Measured background block.
 /// @param[out] hfd_median Median half-flux diameter.
+/// @param[out] csv_out When non-null and @p report_type > 0, receives the
+///             per-star CSV payload (header line plus one line per accepted
+///             star). The caller decides where to write it. Ignored for
+///             report-only mode.
 ///----------------------------------------
 
 void analyse_image(const ImageArray& img,
@@ -239,7 +243,8 @@ void analyse_image(const ImageArray& img,
                    int report_type,
                    int& star_counter,
                    Background& bck,
-                   double& hfd_median);
+                   double& hfd_median,
+                   std::string* csv_out = nullptr);
                    
 ///----------------------------------------
 ///   @brief Apply a "most common value" (mode) filter.

@@ -183,3 +183,33 @@ else()
 	message(STATUS "CLI binary not found at ${ASTAP_CLI_BIN} — skipping cli_test. "
 	               "Build the top-level project first.")
 endif()
+
+# ---- Differential test (ASTAP++ vs original astap_cli oracle) ---------------
+
+# Compares the ported binary against the reference oracle over a shared image
+# corpus. Registered only when the port binary exists; at runtime it skips
+# individual cases (passing) when the oracle or a corpus image is missing, so
+# CI without the private corpus stays green.
+#
+#   ASTAP_ORACLE_BIN  reference astap_cli   (default: tests/oracle/astap_cli)
+#   ASTAP_CORPUS_DIR  shared image corpus   (default: ~/Desktop/ASTAP Tests)
+if(NOT DEFINED ASTAP_ORACLE_BIN OR ASTAP_ORACLE_BIN STREQUAL "")
+	set(ASTAP_ORACLE_BIN "${CMAKE_CURRENT_SOURCE_DIR}/oracle/astap_cli")
+endif()
+if(NOT DEFINED ASTAP_CORPUS_DIR OR ASTAP_CORPUS_DIR STREQUAL "")
+	set(ASTAP_CORPUS_DIR "$ENV{HOME}/Desktop/ASTAP Tests")
+endif()
+
+if(EXISTS "${ASTAP_CLI_BIN}")
+	add_executable(differential_analyse_test differential_analyse_test.cpp)
+	target_include_directories(differential_analyse_test PRIVATE "${ASTAP_DOCTEST_HEADERS}")
+	target_compile_definitions(differential_analyse_test PRIVATE
+		ASTAP_BIN_PATH="${ASTAP_CLI_BIN}"
+		ASTAP_ORACLE_BIN="${ASTAP_ORACLE_BIN}"
+		ASTAP_CORPUS_DIR="${ASTAP_CORPUS_DIR}")
+	target_compile_features(differential_analyse_test PRIVATE cxx_std_23)
+	add_test(NAME differential_analyse_test COMMAND differential_analyse_test)
+	message(STATUS "differential_analyse_test: oracle=${ASTAP_ORACLE_BIN} corpus=${ASTAP_CORPUS_DIR}")
+else()
+	message(STATUS "CLI binary not found — skipping differential_analyse_test.")
+endif()

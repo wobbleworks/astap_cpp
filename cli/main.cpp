@@ -372,13 +372,26 @@ int run_analyse(const Args& a,
     double hfd_median   = 0.0;
     astap::Background bck{};
 
+    std::string csv_payload;
     astap::stacking::analyse_image(astap::img_loaded,
                                    astap::head,
                                    snr_min,
                                    report_type,
                                    star_counter,
                                    bck,
-                                   hfd_median);
+                                   hfd_median,
+                                   extract_csv ? &csv_payload : nullptr);
+
+    // -extract exports the per-star list next to the output base, matching
+    // the original ASTAP's ChangeFileExt(filename2, '.csv').
+    if (extract_csv && !csv_payload.empty()) {
+        auto csv_path = output_base;
+        csv_path.replace_extension(".csv");
+        std::ofstream ofs(csv_path);
+        // Trailing newline mirrors the original's writeln(f, startext), which
+        // appends a blank line after the already-newline-terminated payload.
+        ofs << csv_payload << '\n';
+    }
 
     std::cout << std::format("HFD_MEDIAN={:.1f}\n", hfd_median);
     std::cout << std::format("STARS={}\n", star_counter);
@@ -544,8 +557,17 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
         int    dummy_count = 0;
         double dummy_hfd   = 0.0;
         astap::Background bck{};
+        std::string csv_payload;
         astap::stacking::analyse_image(astap::img_loaded, astap::head, snr_min,
-                                       /*report_type=*/2, dummy_count, bck, dummy_hfd);
+                                       /*report_type=*/2, dummy_count, bck, dummy_hfd,
+                                       &csv_payload);
+        // -extract2 includes ra/dec columns (head carries the solved WCS).
+        if (!csv_payload.empty()) {
+            auto csv_path = output_base;
+            csv_path.replace_extension(".csv");
+            std::ofstream ofs(csv_path);
+            ofs << csv_payload;
+        }
     }
 
     if (astap::commandline_log) {

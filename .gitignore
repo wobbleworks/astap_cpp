@@ -29,3 +29,6 @@ lib/
 
 # Upstream Pascal source (reference only, not part of the C++ port)
 src/analysis/*.pas
+
+# Reference oracle binary for differential testing (original astap_cli, not ours)
+tests/oracle/

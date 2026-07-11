@@ -14,12 +14,14 @@
 #include <cstdio>
 #include <limits>
 #include <numbers>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "../core/fits.h"
 #include "../core/globals.h"
 #include "../core/photometry.h"
+#include "../core/util.h"          // smedian (the CCDciel-style median helper)
 
 ///----------------------------------------
 namespace astap::stacking {
@@ -1187,7 +1189,8 @@ void analyse_image(const ImageArray& img,
                    int report_type,
                    int& star_counter,
                    Background& bck,
-                   double& hfd_median) {
+                   double& hfd_median,
+                   std::string* csv_out) {
     star_counter = 0;
     hfd_median   = 99.0;
     
@@ -1198,13 +1201,14 @@ void analyse_image(const ImageArray& img,
     const auto width5  = static_cast<int>(img[0][0].size());
     const auto height5 = static_cast<int>(img[0].size());
     
-    // GUI-driven limits replaced by hard-coded defaults.
-    // TODO: plumb through once the stacking UI is rebuilt.
-    constexpr auto max_stars_default = 500;
-    constexpr auto hfd_min_default   = 0.8;
-    
-    const auto max_stars = max_stars_default;
-    const auto hfd_min   = hfd_min_default;
+    // max_stars mirrors the original's stackmenu1.max_stars1 field, which the
+    // CLI -s option populates (astap::max_stars_setting, default 500). It caps
+    // the retry loop that lowers the detection level until enough stars appear.
+    const auto max_stars = astap::max_stars_setting;
+    // hfd_min matches the original's max(0.8, min_star_size_stacking): the
+    // stacking field is not command-line settable, so it stays at the
+    // two-pixel floor of 0.8 that rejects hot pixels.
+    const auto hfd_min = 0.8;
     
     auto len = 1000;
     auto hfd_list = std::vector<double>(len);
@@ -1218,8 +1222,10 @@ void analyse_image(const ImageArray& img,
     
     auto retries = 3;
     
-    // Approximate min_background from head.datamax_org
-    const auto min_background = (head.datamax_org <= 255) ? 0.0 : 8.0;
+    // Low-dynamic-range images (8-bit, or a datamax at/below 255) get a
+    // min_background of 0; everything else 8.
+    const auto min_background =
+        (astap::nrbits == 8 || head.datamax_org <= 255) ? 0.0 : 8.0;
     
     auto startext = std::string{};
     
@@ -1273,24 +1279,14 @@ void analyse_image(const ImageArray& img,
                         auto yc = 0.0;
                         hfd_measure(img, fitsX, fitsY, 14, 99, 0.0,
                                     hfd1, fwhm, snr, flux, xc, yc);
-                        // HFD ceiling of 10 rejects extended sources (galaxies,
-                        // nebulosity). Was 30 in the initial port, which let
-                        // galactic cores through as "stars". Compact galaxy
-                        // cores (NGC 990) can still produce HFD ~9.5 which
-                        // passes — treat them as valid alignment features
-                        // (stable centroid across frames).
-                        if (hfd1 <= 10.0 && snr > snr_min && hfd1 > hfd_min) {
+                        // Accept as a star when HFD is within the ceiling, the
+                        // SNR clears the threshold, and HFD exceeds hfd_min (the
+                        // two-pixel floor that rejects hot pixels). The ceiling
+                        // of 30 keeps extended sources — soft/large stars and
+                        // compact galaxy cores — in the count.
+                        if (hfd1 <= 30.0 && snr > snr_min && hfd1 > hfd_min) {
                             const auto xci = static_cast<int>(std::round(xc));
                             const auto yci = static_cast<int>(std::round(yc));
-
-                            // Re-check the mask at the refined centroid — for
-                            // extended sources, a halo pixel outside the first
-                            // mask triggers HFD whose centroid then drifts
-                            // back into the already-accepted region. Skip it.
-                            if (xci >= 0 && xci < width5 && yci >= 0 && yci < height5
-                                    && img_sa[0][yci][xci] > 0.0f) {
-                                continue;
-                            }
 
                             if (star_counter >= len) {
                                 len += 1000;
@@ -1298,10 +1294,11 @@ void analyse_image(const ImageArray& img,
                             }
                             hfd_list[star_counter++] = hfd1;
 
-                            // Mark a circular exclusion zone around the star.
-                            // 1.5*HFD matches find_stars; 3*HFD (original)
-                            // merges distinct stars ~10 pixels apart.
-                            const auto radius = static_cast<int>(std::round(1.5 * hfd1));
+                            // Mark the whole circular star area as occupied to
+                            // prevent double detections. Anything between 2.5 and
+                            // 3.5 * HFD performs the same; a real star PSF has
+                            // wider wings than a Gaussian predicts.
+                            const auto radius = static_cast<int>(std::round(3.0 * hfd1));
                             const auto sqr_radius = radius * radius;
                             for (auto n = -radius; n <= radius; ++n) {
                                 for (auto m = -radius; m <= radius; ++m) {
@@ -1346,18 +1343,22 @@ void analyse_image(const ImageArray& img,
             --retries;
         } while (!(star_counter >= max_stars || retries < 0));
         
-        // Compute median HFD
+        // Compute median HFD. Uses the CCDciel-style median (averages the
+        // middle two/three samples), matching the original analyse_image's
+        // SMedian — not the plain nth-element s_median used for pixel stacks.
         if (star_counter > 0 && report_type <= 1) {
-            hfd_median = s_median(hfd_list, star_counter);
+            hfd_median = astap::core::smedian(std::span<const double>{hfd_list},
+                                              star_counter);
         } else {
             hfd_median = 99.0;
         }
     }
     
-    if (report_type > 0) {
-        // TODO: write ChangeFileExt(filename2, '.csv'). `filename2` is a
-        // global; until threaded through, the CSV payload is discarded.
-        [[maybe_unused]] auto& csv_payload = startext;
+    if (report_type > 0 && csv_out != nullptr) {
+        // Hand the assembled CSV back to the caller (CLI / test harness),
+        // which owns the output path. Mirrors the original Pascal, which
+        // wrote ChangeFileExt(filename2, '.csv').
+        *csv_out = std::move(startext);
     }
 }
 
