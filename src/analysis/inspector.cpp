@@ -162,4 +162,20 @@ void filter_hfd(StarList& hfd_values, int nr,
 		mean /= static_cast<float>(nr);
 }
 
+TiltResult classify_tilt(double median_best, double median_worst,
+                         double hfd_median) {
+	TiltResult r;
+	r.tilt_hfd = median_worst - median_best;
+	r.tilt_percent = (hfd_median != 0.0) ? 100.0 * r.tilt_hfd / hfd_median : 0.0;
+
+	const double t = r.tilt_percent;
+	if      (t < 5.0)  r.classification = "none";
+	else if (t < 10.0) r.classification = "almost none";
+	else if (t < 15.0) r.classification = "mild";
+	else if (t < 20.0) r.classification = "moderate";
+	else if (t < 30.0) r.classification = "severe";
+	else               r.classification = "extreme";
+	return r;
+}
+
 }  // namespace astap::analysis

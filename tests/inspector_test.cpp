@@ -107,3 +107,26 @@ TEST_CASE("measure_star_aspect: star at edge returns failure") {
 	auto result = measure_star_aspect(img, 2.0, 2.0, 20, 100.0, 1.0);
 	CHECK(result.aspect == doctest::Approx(999.0));
 }
+
+///----------------------------------------
+/// MARK: classify_tilt
+///----------------------------------------
+
+TEST_CASE("classify_tilt: thresholds and value") {
+	// hfd_median = 10, so tilt_percent == 10 * (worst - best).
+	CHECK(classify_tilt(2.0, 2.0, 10.0).classification == "none");         //  0%
+	CHECK(classify_tilt(2.0, 2.7, 10.0).classification == "almost none");  //  7%
+	CHECK(classify_tilt(2.0, 3.2, 10.0).classification == "mild");         // 12%
+	CHECK(classify_tilt(2.0, 3.7, 10.0).classification == "moderate");     // 17%
+	CHECK(classify_tilt(2.0, 4.5, 10.0).classification == "severe");       // 25%
+
+	const auto extreme = classify_tilt(2.0, 6.0, 10.0);                    // 40%
+	CHECK(extreme.classification == "extreme");
+	CHECK(extreme.tilt_hfd == doctest::Approx(4.0));
+	CHECK(extreme.tilt_percent == doctest::Approx(40.0));
+}
+
+TEST_CASE("classify_tilt: exact boundary is the higher band") {
+	// t < 5 is "none"; exactly 5% is not < 5, so it falls to "almost none".
+	CHECK(classify_tilt(0.0, 0.5, 10.0).classification == "almost none");  // 5%
+}

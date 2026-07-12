@@ -15,6 +15,8 @@
 
 #include "../types.h"
 
+#include <string>
+
 namespace astap::analysis {
 
 using astap::ImageArray;
@@ -96,6 +98,53 @@ struct InspectorAnalysis {
 [[nodiscard]] InspectorAnalysis ccd_inspector_analyse(const ImageArray& img,
                                                       const astap::Header& head,
                                                       char detype, bool aspect);
+
+/// Tilt classification derived from the best/worst region HFD medians.
+struct TiltResult {
+	double      tilt_hfd{};       ///< median_worst - median_best (HFD units).
+	double      tilt_percent{};   ///< 100 * tilt_hfd / hfd_median.
+	std::string classification;   ///< none / almost none / mild / moderate / severe / extreme.
+};
+
+/// Classify sensor tilt from the best and worst region HFD medians. Pure
+/// (unit_inspector_plot.pas:575-587); thresholds 5/10/15/20/30 percent.
+[[nodiscard]] TiltResult classify_tilt(double median_best, double median_worst,
+                                       double hfd_median);
+
+/// Full CCD-inspector result: focus (median HFD/FWHM), sensor tilt (best/worst
+/// region HFD spread), and field curvature (outer-ring minus centre HFD). The
+/// GUI octagon/vector overlay is not produced.
+struct InspectorTilt {
+	bool        ok{false};                 ///< false when no image or too few stars in the needed regions.
+	int         nhfd{0};                   ///< Total detected stars.
+	double      hfd_median{0.0};           ///< Median HFD over all stars.
+	double      fwhm_median{0.0};          ///< Median FWHM over all stars.
+	double      tilt_hfd{100.0};           ///< median_worst - median_best (100 = not computed).
+	double      tilt_percent{0.0};         ///< 100 * tilt_hfd / hfd_median.
+	std::string classification;            ///< Tilt severity label (empty if not computed).
+	bool        has_off_axis{false};       ///< Whether off_axis_aberration is valid.
+	double      off_axis_aberration{0.0};  ///< Outer-ring median HFD minus centre (region 22).
+	// Per-region HFD medians (0 = not computed). Layout (FITS 1,1 = bottom-left):
+	//   13 23 33 / 12 22 32 / 11 21 31, plus the outer ring.
+	double      median_11{}, median_21{}, median_31{};
+	double      median_12{}, median_22{}, median_32{};
+	double      median_13{}, median_23{}, median_33{};
+	double      median_outer_ring{};
+};
+
+/// Detect stars across the frame, bin them into a 3x3 region grid (or three
+/// 120-degree sectors when @p triangle is set) and report focus, sensor tilt
+/// and field curvature — the computational core of unit_inspector_plot.pas
+/// CCDinspector. GUI drawing is omitted. Precondition: the histogram is current
+/// for @p img (call get_hist(0, img) first if unsure).
+///
+/// @param snr_min        Minimum SNR for a usable star (typically 30).
+/// @param triangle       Three-sector "screw" tilt mode instead of the 9-grid.
+/// @param measuring_angle Sector reference angle (degrees) for triangle mode.
+[[nodiscard]] InspectorTilt ccd_inspector(const ImageArray& img,
+                                          const astap::Header& head,
+                                          double snr_min, bool triangle,
+                                          double measuring_angle);
 
 /// Wrap an angle into the symmetric interval [-range/2, +range/2].
 ///
