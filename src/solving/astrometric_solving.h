@@ -76,12 +76,27 @@ void bin_and_find_stars(const ImageArray& img,
                         std::string& short_warning);
                         
 ///----------------------------------------
-///  @brief Select a downsampling factor for solving based on image height.
+///  @brief Select a downsampling factor based on image height alone.
+///  @details Height-only heuristic (>2500 → 2, else 1), capped at 16. Used by
+///           the stacking/alignment paths. The solver uses
+///           @ref report_binning_astrometric instead.
 ///  @param height Image height in pixels.
 /// @return Binning factor to apply before solving.
 ///----------------------------------------
 
 [[nodiscard]] int report_binning(double height);
+
+///----------------------------------------
+///  @brief Select a solving downsample factor from height and pixel scale.
+///  @details Like @ref report_binning, but in Auto mode also bins fine-scale
+///           images up so the working scale stays above ~1"/px
+///           (max(base, round(1.5 / arcsec_per_px))). Capped at 16.
+///  @param height        Image height in pixels (after any cropping).
+///  @param arcsec_per_px  Unbinned image scale in arcseconds per pixel.
+/// @return Binning factor to apply before solving.
+///----------------------------------------
+
+[[nodiscard]] int report_binning_astrometric(double height, double arcsec_per_px);
 
 ///----------------------------------------
 ///  @brief Position angle of (ra1, dec1) as seen from (ra0, dec0).

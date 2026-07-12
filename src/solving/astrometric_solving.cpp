@@ -764,6 +764,42 @@ void binX2_crop(double crop, const ImageArray& img, ImageArray& img2) {
     }
 }
 
+// General block-average binning for any factor, used when `binning` is not one
+// of the unrolled 1/2/3/4 cases (the adaptive solver scale can reach up to 16).
+// Averages each binning×binning block to one mono pixel; identical in result to
+// the unrolled cases. Mirrors the "any bin factor" branch of the Pascal
+// bin_mono_and_crop.
+void binN_crop(int binning, double crop, const ImageArray& img, ImageArray& img2) {
+    const auto nrcolors = static_cast<int>(img.size());
+    const auto width5   = static_cast<int>(img[0][0].size());
+    const auto height5  = static_cast<int>(img[0].size());
+
+    const auto w = static_cast<int>(crop * width5  / binning);
+    const auto h = static_cast<int>(crop * height5 / binning);
+
+    img2.assign(1, std::vector<std::vector<float>>(h, std::vector<float>(w, 0.0f)));
+
+    const auto shiftX = static_cast<int>(std::lround(width5  * (1.0 - crop) / 2.0));
+    const auto shiftY = static_cast<int>(std::lround(height5 * (1.0 - crop) / 2.0));
+
+    for (int fitsY = 0; fitsY < h; ++fitsY) {
+        for (int fitsX = 0; fitsX < w; ++fitsX) {
+            const auto x = shiftX + fitsX * binning;
+            const auto y = shiftY + fitsY * binning;
+            auto val = 0.0f;
+            for (int k = 0; k < nrcolors; ++k) {
+                for (int i = 0; i < binning; ++i) {
+                    for (int j = 0; j < binning; ++j) {
+                        val += img[k][y + i][x + j];
+                    }
+                }
+            }
+            img2[0][fitsY][fitsX] =
+                val / static_cast<float>(nrcolors * binning * binning);
+        }
+    }
+}
+
 void bin_and_find_stars(const ImageArray& img,
                         int binning, double cropping, double hfd_min,
                         double hfd_max,
@@ -800,7 +836,11 @@ void bin_and_find_stars(const ImageArray& img,
         else if (binning == 1) {
             binX1_crop(cropping, img, img_binned);
         }
-        
+        else {
+            // Adaptive scale-based binning can pick 5..16 for fine-scale images.
+            binN_crop(binning, cropping, img, img_binned);
+        }
+
         get_background(0, img_binned, true, true, bck);
         find_stars(img_binned, hfd_min, hfd_max, max_stars, bck, starlist3);
         
@@ -842,12 +882,29 @@ void bin_and_find_stars(const ImageArray& img,
 }
 
 int report_binning(double height) {
-    auto result = stackcfg.downsample_for_solving_index;
+    auto result = std::min(16, stackcfg.downsample_for_solving_index);  // 16 max
     // 0 = Auto, -1 = none.
     if (result <= 0) {
         result = (height > 2500) ? 2 : 1;
     }
     return result;
+}
+
+int report_binning_astrometric(double height, double arcsec_per_px) {
+    auto result = stackcfg.downsample_for_solving_index;
+    // 0 = Auto, -1 = none.
+    if (result <= 0) {
+        result = (height > 2500) ? 2 : 1;
+        // Bin fine-scale images up so the working scale stays above ~1"/px
+        // (target ~1.5"/px). arcsec_per_px is guaranteed positive here (the
+        // caller resolves fov_org before this point); guard anyway so a stray
+        // zero can't produce a non-finite bin factor.
+        if (arcsec_per_px > 0.0) {
+            result = std::max(result,
+                static_cast<int>(std::lround(1.5 / arcsec_per_px)));
+        }
+    }
+    return std::min(16, result);  // 16 max; too much anyhow
 }
 
 ///----------------------------------------
@@ -1031,9 +1088,9 @@ bool solve_image(ImageArray& img, Header& hd,
                                 std::to_string(max_stars) + " stars.");
         }
         
-        binning = report_binning(hd.height * cropping);
-        hfd_min = std::max(0.8,
-            min_star_size_arcsec / (binning * fov_org * 3600.0 / hd.height));
+        const double arcsec_per_px = fov_org * 3600.0 / hd.height;  // unbinned scale
+        binning = report_binning_astrometric(hd.height * cropping, arcsec_per_px);
+        hfd_min = std::max(0.8, min_star_size_arcsec / (binning * arcsec_per_px));
             
         bin_and_find_stars(img, binning, cropping, hfd_min, /*hfd_max=*/10.0,
                            max_stars, get_hist, starlist2, warning_downsample);

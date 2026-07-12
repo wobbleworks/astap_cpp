@@ -143,6 +143,17 @@ struct Wcs {
 	return keys;
 }
 
+/// @brief Return the value (text right of '=') of @p key in an .ini, or "".
+[[nodiscard]] static std::string ini_value(const fs::path& path, std::string_view key) {
+	std::ifstream ifs(path);
+	std::string line;
+	while (std::getline(ifs, line)) {
+		if (line.rfind(key, 0) == 0 && line.size() > key.size() && line[key.size()] == '=')
+			return line.substr(key.size() + 1);
+	}
+	return {};
+}
+
 /// @brief True when the .wcs beside @p base carries SIP distortion terms.
 [[nodiscard]] static bool wcs_has_sip(const fs::path& base) {
 	auto wcs = base; wcs.replace_extension(".wcs");
@@ -266,11 +277,8 @@ static void solve_case(const std::string& name, const std::string& file,
 
 	// The port's .ini must carry exactly the oracle's key set. This guards
 	// against re-introducing a line current ASTAP dropped (DIMENSIONS=) or
-	// missing one it still emits (ERROR=, WARNING=). Only keys are compared:
-	// WCS values are checked separately, CMDLINE differs by path, and the
-	// WARNING= *text* can still differ on small images because the port and
-	// oracle choose different auto-binning branches (a separate parity item,
-	// tracked in PARITY_AUDIT.md — both here correctly decline to solve).
+	// missing one it still emits (ERROR=, WARNING=). Only keys are compared
+	// here: WCS values are checked separately and CMDLINE differs by path.
 	{
 		const auto o_keys = ini_keys(o_ini);
 		const auto p_keys = ini_keys(p_ini);
@@ -281,6 +289,11 @@ static void solve_case(const std::string& name, const std::string& file,
 			FAIL_CHECK(name << ": .ini key sets differ — oracle-only={" << only_o
 			                << "} port-only={" << only_p << "}");
 		}
+		// ERROR/WARNING text must match too. WARNING in particular pins the
+		// adaptive-binning parity: a wrong bin factor puts the port in a
+		// different bin_and_find_stars branch and changes the warning text.
+		CHECK(ini_value(o_ini, "ERROR")   == ini_value(p_ini, "ERROR"));
+		CHECK(ini_value(o_ini, "WARNING") == ini_value(p_ini, "WARNING"));
 	}
 
 	MESSAGE(name << ": PLTSOLVD oracle=" << o.solved << " port=" << p.solved);
