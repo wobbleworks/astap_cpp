@@ -474,6 +474,7 @@ struct PlottedDeepSky {
 	double axis_ratio{};     ///< Minor/major axis ratio (width/length).
 	int pen_width{};         ///< Outline pen width, min(4, max(1, round(len/70))).
 	std::string name;        ///< Composed designation ('/'-joined); empty if none.
+	std::string abbr;        ///< Primary designation only (Pascal naam2); empty if none.
 	bool has_label{};        ///< True when the centre is on-image and named.
 	int font_size{};         ///< Label point size, round(min(20, max(base, len/2))).
 	bool is_reference{};     ///< naam2 begins with '0' (AAVSO comparison star).
@@ -509,6 +510,28 @@ std::vector<PlottedDeepSky> plot_deepsky(const Header& head,
                                          int formalism = 0,
                                          bool flip_horizontal = false,
                                          bool flip_vertical = false);
+
+/// Extract the on-image, named objects from a plot_deepsky result as photometry
+/// targets — the headless form of Pascal plot_deepsky's extract_visible=true
+/// side effect (which filled the global variable_list for the photometry tab).
+///
+/// Every plotted object with has_label set becomes one VariableInfo, in order,
+/// capped at @p max_count (Pascal's fixed 1000-entry variable_list). The primary
+/// designation (Pascal naam2) is copied to abbr; @p source marks the catalog
+/// origin (0 = local, matching the deep-sky/variable path); index is the
+/// target's position in the returned list.
+///
+/// Kept a pure transform over the plot_deepsky result rather than a flag on
+/// plot_deepsky itself, mirroring the layout_labels split.
+///
+/// @param plotted    A plot_deepsky placement list.
+/// @param source     Catalog-origin tag stored on each target (0 = local).
+/// @param max_count  Maximum targets to emit (Pascal's 1000-entry cap).
+/// @return Photometry targets in plot order.
+[[nodiscard]]
+std::vector<VariableInfo> extract_visible(std::span<const PlottedDeepSky> plotted,
+                                          int source = 0,
+                                          std::size_t max_count = 1000);
 
 /// A label to be placed by layout_labels: its anchor and text extent.
 struct LabelInput {

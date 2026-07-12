@@ -571,3 +571,74 @@ TEST_CASE("DeepSkyDatabase: a versioned catalog with an old header loads but rep
 	CHECK(db.resident().value() == DeepSkyCatalog::Variable15);
 	CHECK(db.lines().size() == 3);
 }
+
+///----------------------------------------
+/// MARK: extract_visible photometry targets
+///----------------------------------------
+
+TEST_CASE("extract_visible: keeps only on-image, named objects, in order") {
+	std::vector<PlottedDeepSky> plotted(3);
+	// Labeled target.
+	plotted[0].ra = 1.0; plotted[0].dec = 0.3;
+	plotted[0].abbr = "NGC7000"; plotted[0].has_label = true;
+	// Off-image (no label) — excluded.
+	plotted[1].ra = 1.1; plotted[1].dec = 0.31;
+	plotted[1].abbr = "OFF"; plotted[1].has_label = false;
+	// Second labeled target.
+	plotted[2].ra = 1.2; plotted[2].dec = 0.32;
+	plotted[2].abbr = "IC5070"; plotted[2].has_label = true;
+
+	auto targets = extract_visible(plotted);
+	REQUIRE(targets.size() == 2);
+
+	CHECK(targets[0].abbr == "NGC7000");
+	CHECK(targets[0].ra == doctest::Approx(1.0));
+	CHECK(targets[0].dec == doctest::Approx(0.3));
+	CHECK(targets[0].source == 0);
+	CHECK(targets[0].index == 0);
+
+	CHECK(targets[1].abbr == "IC5070");
+	CHECK(targets[1].index == 1);
+}
+
+TEST_CASE("extract_visible: honours the target cap") {
+	std::vector<PlottedDeepSky> plotted(5);
+	for (auto& p : plotted) {
+		p.abbr = "X";
+		p.has_label = true;
+	}
+
+	auto targets = extract_visible(plotted, 0, 3);
+	CHECK(targets.size() == 3);
+}
+
+TEST_CASE("extract_visible: source tag is stored on every target") {
+	std::vector<PlottedDeepSky> plotted(1);
+	plotted[0].abbr = "V001";
+	plotted[0].has_label = true;
+
+	auto targets = extract_visible(plotted, 1);  // 1 = VSX, e.g.
+	REQUIRE(targets.size() == 1);
+	CHECK(targets[0].source == 1);
+}
+
+TEST_CASE("extract_visible: abbr is the primary designation, not the composed label") {
+	const auto head = make_tan_header(1.0, 0.3);
+
+	// A three-name object: composed label is naam2/naam3/naam4, but the
+	// photometry abbr must be naam2 alone.
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"137510,61879, NGC7000/C20/LBN373,60.0,30.0,45"
+	};
+
+	auto plotted = plot_deepsky(head, db);
+	REQUIRE(plotted.size() == 1);
+	CHECK(plotted[0].name == "NGC7000/C20/LBN373");
+	CHECK(plotted[0].abbr == "NGC7000");
+
+	auto targets = extract_visible(plotted);
+	REQUIRE(targets.size() == 1);
+	CHECK(targets[0].abbr == "NGC7000");
+}

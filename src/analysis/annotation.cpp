@@ -472,6 +472,7 @@ std::vector<PlottedDeepSky> plot_deepsky(const Header& head,
 				p.name = obj.name + '/' + obj.name2;
 			else
 				p.name = obj.name + '/' + obj.name2 + '/' + obj.name3;
+			p.abbr = obj.name;  // primary designation (Pascal naam2)
 			p.is_reference = (obj.name.front() == '0');
 		}
 
@@ -507,6 +508,33 @@ std::vector<PlottedDeepSky> plot_deepsky(const Header& head,
 	}
 
 	return results;
+}
+
+// ---------------------------------------------------------------------------
+// extract_visible
+// ---------------------------------------------------------------------------
+
+std::vector<VariableInfo> extract_visible(std::span<const PlottedDeepSky> plotted,
+                                          int source, std::size_t max_count)
+{
+	std::vector<VariableInfo> targets;
+
+	for (const PlottedDeepSky& p : plotted) {
+		// Only on-image, named objects become photometry targets (Pascal draws
+		// the label and records the target under the same gate).
+		if (!p.has_label) continue;
+		if (targets.size() >= max_count) break;
+
+		VariableInfo v;
+		v.ra = p.ra;
+		v.dec = p.dec;
+		v.abbr = p.abbr;
+		v.source = source;
+		v.index = static_cast<int>(targets.size());
+		targets.push_back(std::move(v));
+	}
+
+	return targets;
 }
 
 // ---------------------------------------------------------------------------
