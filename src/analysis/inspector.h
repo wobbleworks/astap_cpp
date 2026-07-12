@@ -62,6 +62,41 @@ struct StarAspect {
 void filter_hfd(StarList& hfd_values, int nr,
                 float& mean, float& min_value, float& max_value);
 
+/// Result of @ref ccd_inspector_analyse: the detected star list plus the
+/// reported summary statistics. The GUI overlays of the original (HFD Voronoi/
+/// contour maps, elongation vectors, on-image text) are not produced.
+struct InspectorAnalysis {
+	bool     ok{false};       ///< false when no image is loaded or < 10 useful stars found.
+	int      nhfd{0};         ///< Number of useful stars.
+	double   median_90{0.0};  ///< 90th-percentile HFD (or aspect ratio), in real units.
+	float    mean{0.0f};      ///< Mean of the filtered values (valid when detype != ' ').
+	float    min_value{0.0f}; ///< Minimum filtered value.
+	float    max_value{0.0f}; ///< Maximum filtered value.
+	StarList stars{};         ///< [0]=x, [1]=y, [2]=HFD*1000 (or aspect*1000), [3]=orientation.
+};
+
+/// Detect stars across the whole frame and summarise focus/tilt quality — the
+/// computational core of unit_inspector_plot.pas CCDinspector_analyse. Uses the
+/// same four-level detection retry ladder as the solver, measures each star's
+/// HFD (and optionally its elongation), and reports the 90th-percentile value
+/// ("10% of measurements are worse than this").
+///
+/// Precondition: the image histogram must already be current for @p img (the
+/// original relies on the load-time histogram; call get_hist(0, img) first if
+/// unsure). The map drawing, vector overlays and on-image text are omitted.
+///
+/// @param img    Image buffer (channel 0 used).
+/// @param head   Image header (dimensions, datamax).
+/// @param detype ' ' = plain HFD, 'V' = Voronoi map, '2' = contour map. Only
+///               selects whether nearest-neighbour median smoothing
+///               (@ref filter_hfd) is applied to the values; the maps
+///               themselves are GUI-only.
+/// @param aspect When true, stores each star's aspect ratio (elongation)
+///               instead of its HFD, and skips the saturation rejection.
+[[nodiscard]] InspectorAnalysis ccd_inspector_analyse(const ImageArray& img,
+                                                      const astap::Header& head,
+                                                      char detype, bool aspect);
+
 /// Wrap an angle into the symmetric interval [-range/2, +range/2].
 ///
 /// @param x     The angle (or value) to wrap.
