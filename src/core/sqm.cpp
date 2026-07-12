@@ -138,10 +138,15 @@ bool calculate_sqm(Header& headx, bool get_bk, bool get_his, int& pedestal2) {
         } else {
             memo2_message("Negative altitude calculated!");
             warning_str += "Negative altitude calculated!";
+            // The value computed above lacks the altitude/airmass correction and
+            // is invalid; do not report it. Matches current ASTAP, which writes
+            // no SQM when the calculation fails (rather than a misleading value).
+            sqmfloat = 0.0;
         }
     } else {
         memo2_message("MZERO calibration failure!");
         warning_str += "MZERO calibration failure!";
+        sqmfloat = 0.0;  // no valid zeropoint → no SQM value
     }
     
     if (backup_made) {

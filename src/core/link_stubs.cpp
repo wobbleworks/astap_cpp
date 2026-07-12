@@ -174,6 +174,11 @@ void raster_rotate(double /*angle*/, double /*cx*/, double /*cy*/,
 
 double annulus_radius = 4.0;  // Pascal default; sqm.cpp reads this.
 
+// Aperture diameter for photometry, in HFD multiples (Pascal flux_aperture1
+// setting). 0 = "max" / extended-object mode. plot_and_measure_stars reads
+// this for the limiting-magnitude aperture; calibrate_photometry sets it.
+double flux_aperture_setting = 0.0;
+
 // Position angle of a second point as seen from a first (Meeus 48.5).
 double position_angle(double /*ra1*/, double /*dec1*/,
                       double /*ra0*/, double /*dec0*/) {

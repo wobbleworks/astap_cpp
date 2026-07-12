@@ -57,6 +57,11 @@ namespace astap::core {
 std::array<std::array<std::uint32_t, 65536>, 3> histogram{};
 std::array<int, 3>                              his_mean{};
 
+// Photometry aperture/annulus globals (real defs live in link_stubs.cpp, which
+// this lightweight test does not link). calibrate_photometry writes them.
+double annulus_radius        = 4.0;
+double flux_aperture_setting = 0.0;
+
 // get_hist is part of imaging.cpp; calibrate_flux doesn't use it but
 // photometry.cpp contains other functions that do (find_star_center etc.)
 // that may get pulled in by the linker. Stub as a no-op.

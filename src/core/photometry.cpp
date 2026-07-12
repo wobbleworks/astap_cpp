@@ -580,6 +580,12 @@ void calibrate_photometry(const ImageArray& img,
                            "set a smaller aperture diameter in tab \"photometry\".");
         }
         
+        // Publish the computed aperture/annulus to the unit globals that
+        // plot_and_measure_stars reads (head.mzero_radius is already set).
+        // Qualified names reach the globals past the same-named ref parameter.
+        astap::core::annulus_radius = static_cast<double>(annulus_radius);
+        astap::core::flux_aperture_setting = apert;
+
         plot_and_measure_stars(img, memo, head, /*calibration*/true,
                                /*plot_stars*/false,
                                /*report_lim_magnitude*/true);

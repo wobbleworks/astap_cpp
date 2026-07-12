@@ -24,6 +24,14 @@
 namespace astap::core {
 ///----------------------------------------
 
+/// @brief Photometry aperture/annulus globals shared between calibrate_photometry,
+///        calculate_sqm and plot_and_measure_stars (the Pascal unit globals).
+///        annulus_radius: HFD annulus in pixels. flux_aperture_setting: aperture
+///        diameter in HFD multiples (0 = max / extended). head.mzero_radius holds
+///        the calibrated aperture radius.
+extern double annulus_radius;
+extern double flux_aperture_setting;
+
 /// MARK: - HFD Types
 
 ///----------------------------------------

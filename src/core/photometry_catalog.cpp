@@ -324,16 +324,19 @@ void plot_and_measure_stars(const ImageArray& img,
         star_source = [iter](CatalogStar& out) { return iter->next(out); };
     }
 
-    // Extended-objects mode for SQM: aperture_setting=0 means the limiting-
-    // magnitude calc uses a very large virtual aperture. Callers that want
-    // point-source aperture calibration set these before calling.
-    head.mzero_radius = 99.0;
-    constexpr auto kAnnulusRadius = 14;
-    constexpr auto kAperture = 0.0;
+    // Honour the annulus_radius / head.mzero_radius the caller set:
+    // calculate_sqm uses 14 / 99 for extended-object SQM; calibrate_photometry
+    // sets point-source values. Do NOT clobber them (the original reads these
+    // as unit globals). aperture_setting drives only the limiting-magnitude
+    // aperture: 0 = extended full-flux (when mzero_radius == 99), otherwise the
+    // point-source aperture ratio.
+    const int annulus = static_cast<int>(std::lround(annulus_radius));
+    const double aperture =
+        (head.mzero_radius == 99.0) ? 0.0 : flux_aperture_setting;
 
     [[maybe_unused]] const auto result = calibrate_flux(
         img, head, memo, star_source,
-        passband, kAnnulusRadius, kAperture, report_lim_magnitude);
+        passband, annulus, aperture, report_lim_magnitude);
 
     // Close any tile file that stayed open (e.g. calibrate_flux stopped early
     // before the StarSource reported exhaustion). No-op for wide-field/online.
