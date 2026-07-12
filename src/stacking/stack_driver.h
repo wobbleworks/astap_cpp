@@ -39,6 +39,7 @@ struct StackResult {
     int                   frames_solved = 0;
     int                   frames_combined = 0;
     std::filesystem::path output;
+    std::filesystem::path reference;   // frame chosen as the alignment reference
     std::string           message;
 };
 

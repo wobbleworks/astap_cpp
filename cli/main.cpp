@@ -763,9 +763,10 @@ int main(int argc, char* argv[]) {
                                                     : std::filesystem::path{};
         const auto res = astap::stacking::stack_files(frames, method, out, mdark, mflat);
         std::cout << std::format(
-            "STACKED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_COMBINED={}\nOUTPUT={}\n",
+            "STACKED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_COMBINED={}\n"
+            "REFERENCE={}\nOUTPUT={}\n",
             res.ok ? 1 : 0, res.frames_input, res.frames_solved,
-            res.frames_combined, res.output.string());
+            res.frames_combined, res.reference.string(), res.output.string());
         if (!res.ok) { std::cerr << "astap: stack failed: " << res.message << '\n'; }
         return res.ok ? 0 : 1;
     }

@@ -107,7 +107,7 @@ struct RunResult { int exit_code; std::string out; };
 /// @brief Copy the available M31 frames into a fresh temp dir (the pre-solve
 ///        pass rewrites each frame's WCS in place, so the corpus is never used
 ///        directly). Returns the dir, the quoted frame arg string, and count.
-struct Staged { fs::path dir; std::string frame_args; int count = 0; };
+struct Staged { fs::path dir; std::string frame_args; std::vector<fs::path> files; int count = 0; };
 
 [[nodiscard]] static Staged stage_m31(const std::string& tag) {
 	Staged s;
@@ -120,6 +120,7 @@ struct Staged { fs::path dir; std::string frame_args; int count = 0; };
 		auto dst = s.dir / src.filename();
 		fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
 		s.frame_args += " " + q(dst.string());
+		s.files.push_back(dst);
 		++s.count;
 	}
 	return s;
@@ -276,6 +277,36 @@ TEST_CASE("batch stack applies a master dark (calibration wiring)") {
 		CHECK(hdr.find("CALSTAT = 'D") != std::string::npos);
 	}
 	CHECK(fits_header_int(out, "LUM_DARK=") >= 1);
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("reference frame is chosen by quality, not input order") {
+	if (!assets_available()) return;
+	auto s = stage_m31("quality");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+
+	const std::string db = " -d " + q(kDbDir.string());
+	auto stack_ref = [&](const std::vector<fs::path>& order) -> std::string {
+		std::string args;
+		for (const auto& f : order) args += " " + q(f.string());
+		const auto out = s.dir / "q.fits";
+		const auto rr = run(q(kPortBin) + " -stackfiles -o " + q(out.string()) + db + args);
+		CHECK(rr.exit_code == 0);
+		return fs::path(field(rr.out, "REFERENCE=")).filename().string();
+	};
+
+	// Forward order, then reversed. A quality-based selector picks the same frame
+	// either way; a positional "use frame [0]" would pick different frames.
+	const auto ref_fwd = stack_ref(s.files);
+	std::vector<fs::path> rev(s.files.rbegin(), s.files.rend());
+	const auto ref_rev = stack_ref(rev);
+
+	CHECK(ref_fwd == ref_rev);         // order-independent → chosen by quality
+	CHECK(!ref_fwd.empty());
+	// For the M31 set the sharpest frame is not the first input, so the chosen
+	// reference must differ from frame [0] of the forward order.
+	CHECK(ref_fwd != s.files.front().filename().string());
 
 	fs::remove_all(s.dir);
 }

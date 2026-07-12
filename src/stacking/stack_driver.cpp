@@ -244,10 +244,12 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
     // ---- A + B: pre-solve pass -------------------------------------------
     // Load each frame; if it lacks a WCS, plate-solve it and persist the
     // solution back into the file. Frames that will not solve are dropped so
-    // they never reach the combiner — the reference frame is the first survivor
-    // and must carry WCS. Mirrors unit_stack.pas:13129-13190.
-    std::vector<FileToDo> keep;
-    keep.reserve(frames.size());
+    // they never reach the combiner. While each frame is loaded, measure its
+    // quality (star_detections / HFD^2) so the sharpest can be chosen as the
+    // alignment reference. Mirrors unit_stack.pas:13129-13190 + 12821.
+    struct Candidate { std::string name; double quality; int width; };
+    std::vector<Candidate> cands;
+    cands.reserve(frames.size());
     for (const auto& path : frames) {
         if (!astap::core::load_fits(path, /*light=*/true, /*load_data=*/true,
                                     /*update_memo=*/true, /*get_ext=*/0,
@@ -265,10 +267,42 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
             memo2_message("Dropping unsolved frame: " + path.string());
             continue;
         }
-        keep.push_back(FileToDo{path.string(), -1});
+        int stars = 0;
+        double hfd_median = 0.0;
+        astap::Background bck{};
+        analyse_image(astap::img_loaded, astap::head, /*snr_min=*/30.0,
+                      /*report_type=*/0, stars, bck, hfd_median, nullptr);
+        const double quality = (hfd_median > 0.0)
+            ? static_cast<double>(stars) / (hfd_median * hfd_median) : 0.0;
+        cands.push_back({path.string(), quality, astap::head.width});
     }
-    r.frames_solved = static_cast<int>(keep.size());
-    if (keep.empty()) { r.message = "no frame could be solved for alignment"; return r; }
+    r.frames_solved = static_cast<int>(cands.size());
+    if (cands.empty()) { r.message = "no frame could be solved for alignment"; return r; }
+
+    // Put the best-quality frame first — the combiner takes the first frame as
+    // the alignment reference (put_best_quality_on_top, unit_stack.pas:12821):
+    // prefer a larger image, then the highest star_detections / HFD^2.
+    {
+        std::size_t best = 0;
+        int    best_width   = cands[0].width;
+        double best_quality = cands[0].quality;
+        for (std::size_t i = 1; i < cands.size(); ++i) {
+            if (cands[i].width > best_width
+                || (cands[i].width == best_width && cands[i].quality > best_quality)) {
+                best_width   = cands[i].width;
+                best_quality = cands[i].quality;
+                best         = i;
+            }
+        }
+        if (best != 0) { std::swap(cands[0], cands[best]); }
+        r.reference = cands[0].name;
+        memo2_message("Reference image selected on quality "
+                      "(star_detections/sqr(hfd)): " + cands[0].name);
+    }
+
+    std::vector<FileToDo> keep;
+    keep.reserve(cands.size());
+    for (const auto& c : cands) { keep.push_back(FileToDo{c.name, -1}); }
 
     // ---- C: select internal-astrometry alignment + dispatch --------------
     astap::use_astrometry_internal = true;
