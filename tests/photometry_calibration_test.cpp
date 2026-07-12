@@ -83,13 +83,8 @@ void get_background(int, const ImageArray&, bool, bool,
 	bck = astap::Background{};
 }
 
-// analyse_image: referenced by calibrate_photometry (not calibrate_flux).
-void analyse_image(const ImageArray&, Header&, int, int,
-                   int& hfd_counter, astap::Background& bck, double& hfd_med) {
-	hfd_counter = 0;
-	bck = astap::Background{};
-	hfd_med = 0.0;
-}
+// analyse_image now resolves to astap::stacking::analyse_image (see the stub
+// after this namespace closes); calibrate_photometry references it.
 
 // plot_and_measure_stars: referenced by calibrate_photometry (not calibrate_flux).
 void plot_and_measure_stars(const ImageArray&, std::vector<std::string>&,
@@ -115,6 +110,19 @@ double Smedian(std::vector<double>& list, int len) {
 }
 
 }  // namespace astap::core
+
+// analyse_image lives in the stacking module; calibrate_photometry calls it
+// across the module boundary. Stub it so the test links without pulling in
+// stack.cpp (which drags the whole detection pipeline).
+namespace astap::stacking {
+void analyse_image(const astap::ImageArray&, const astap::Header&, double, int,
+                   int& star_counter, astap::Background& bck, double& hfd_med,
+                   std::string*) {
+	star_counter = 0;
+	bck = astap::Background{};
+	hfd_med = 0.0;
+}
+}  // namespace astap::stacking
 
 ///----------------------------------------
 /// MARK: Helpers

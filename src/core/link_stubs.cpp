@@ -101,8 +101,8 @@ int get_demosaic_pattern() { return 0; }
 // -----------------------------------------------------------------------------
 
 // plot_and_measure_stars is ported in core/photometry_catalog.cpp.
+// dsspos is ported in core/fits.cpp (next to the plate-coefficient globals).
 
-void dsspos(double, double, double& ra, double& dec)  { ra = 0; dec = 0; }
 void EQU_GAL(double, double, double& l, double& b)    { l  = 0; b   = 0; }
 
 // -----------------------------------------------------------------------------

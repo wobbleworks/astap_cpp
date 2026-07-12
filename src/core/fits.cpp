@@ -179,6 +179,59 @@ std::size_t line_end_after(std::string_view hay, std::size_t one_based) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// dsspos — accurate RA/Dec for a pixel of a Digital Sky Survey plate using the
+// DSS polynomial plate model (STScI README.TXT / WCStools DSSPOS.C). Defined
+// here because the plate coefficients it reads (x_coeff/y_coeff/ppo_coeff/
+// plate_ra/plate_dec/pixel size + offset) are the file-local globals the FITS
+// header reader fills above. Magnitude and colour terms are ignored, as in the
+// original — an arbitrary pixel carries no magnitude.
+// ---------------------------------------------------------------------------
+
+void dsspos(double xpix, double ypix, double& ra, double& dec) {
+    constexpr double cons2r = 3600.0 * 180.0 / kPi;  // 206264.8062470964
+    constexpr double twopi  = 2.0 * kPi;
+
+    // Image pixels -> plate pixels (the -1.0+0.5 factors are from the original).
+    const double x = xpix + x_pixel_offset - 1.0 + 0.5;
+    const double y = ypix + y_pixel_offset - 1.0 + 0.5;
+
+    // Plate pixels -> millimetres.
+    const double xmm  = (ppo_coeff[2] - x * x_pixel_size) / 1000.0;
+    const double ymm  = (y * y_pixel_size - ppo_coeff[5]) / 1000.0;
+    const double xmm2 = xmm * xmm;
+    const double ymm2 = ymm * ymm;
+    const double xmm3 = xmm * xmm2;
+    const double ymm3 = ymm * ymm2;
+    const double x2y2 = xmm2 + ymm2;
+
+    // Standard coordinates (xi, eta) in arcsec from the x/y plate models.
+    const double xi =
+        x_coeff[0] * xmm + x_coeff[1] * ymm + x_coeff[2] + x_coeff[3] * xmm2 +
+        x_coeff[4] * xmm * ymm + x_coeff[5] * ymm2 + x_coeff[6] * x2y2 +
+        x_coeff[7] * xmm3 + x_coeff[8] * xmm2 * ymm + x_coeff[9] * xmm * ymm2 +
+        x_coeff[10] * ymm3 + x_coeff[11] * xmm * x2y2 +
+        x_coeff[12] * xmm * x2y2 * x2y2;
+    const double eta =
+        y_coeff[0] * ymm + y_coeff[1] * xmm + y_coeff[2] + y_coeff[3] * ymm2 +
+        y_coeff[4] * xmm * ymm + y_coeff[5] * xmm2 + y_coeff[6] * x2y2 +
+        y_coeff[7] * ymm3 + y_coeff[8] * ymm2 * xmm + y_coeff[9] * ymm * xmm2 +
+        y_coeff[10] * xmm3 + y_coeff[11] * ymm * x2y2 +
+        y_coeff[12] * ymm * x2y2 * x2y2;
+
+    // Arcsec -> radians, then standard coordinates -> RA/Dec.
+    const double xir  = xi / cons2r;
+    const double etar = eta / cons2r;
+    const double ctan = std::sin(plate_dec) / std::cos(plate_dec);
+    const double ccos = std::cos(plate_dec);
+
+    const double raoff = std::atan2(xir / ccos, 1.0 - etar * ctan);
+    double ra_out = raoff + plate_ra;
+    if (ra_out < 0.0) ra_out += twopi;
+    ra  = ra_out;
+    dec = std::atan(std::cos(raoff) * ((etar + ctan) / (1.0 - (etar * ctan))));
+}
+
+// ---------------------------------------------------------------------------
 // reset_fits_global_variables
 // ---------------------------------------------------------------------------
 

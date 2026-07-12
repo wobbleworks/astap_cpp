@@ -22,6 +22,7 @@
 #include "../core/globals.h"
 #include "../core/photometry.h"
 #include "../core/util.h"          // smedian (the CCDciel-style median helper)
+#include "../core/wcs.h"           // pixel_to_celestial (the real WCS projector)
 
 ///----------------------------------------
 namespace astap::stacking {
@@ -81,13 +82,11 @@ inline void hfd_measure(const ImageArray& img,
     yc   = r.yc;
 }
 
-void pixel_to_celestial([[maybe_unused]] const Header& hd,
-                        [[maybe_unused]] double px,
-                        [[maybe_unused]] double py,
-                        [[maybe_unused]] int formalism,
-                        double& ra, double& decl) {
-    // TODO: port from unit_astrometric_solving.pas
-    ra = decl = 0.0;
+void pixel_to_celestial(const Header& hd, double px, double py,
+                        int formalism, double& ra, double& decl) {
+    // The real projector (TAN / SIP / DSS) lives in core/wcs.cpp; forward to it
+    // so the analyse CSV gets true RA/Dec instead of zeros.
+    astap::core::pixel_to_celestial(hd, px, py, formalism, ra, decl);
 }
 
 [[nodiscard]] bool solve_image([[maybe_unused]] const ImageArray& img,
@@ -119,12 +118,49 @@ void pixel_to_celestial([[maybe_unused]] const Header& hd,
     return false;
 }
 
-void bicubic_interpolate([[maybe_unused]] const ImageArray& img,
-                         [[maybe_unused]] double x,
-                         [[maybe_unused]] double y,
+/// @brief Catmull-Rom cubic spline through p1..p2 (p0/p3 shape the ends).
+///        Tension 0.5. Returns the interpolated value at fraction @p t in [0,1].
+[[nodiscard]] double catmull_rom(double p0, double p1, double p2, double p3,
+                                 double t) {
+    const auto t2 = t * t;
+    const auto t3 = t2 * t;
+    const auto a0 = 0.5 * (-p0 + 3.0 * p1 - 3.0 * p2 + p3);
+    const auto a1 = 0.5 * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3);
+    const auto a2 = 0.5 * (-p0 + p2);
+    const auto a3 = 0.5 * 2.0 * p1;
+    return a0 * t3 + a1 * t2 + a2 * t + a3;
+}
+
+/// @brief Bicubic (Catmull-Rom) sub-pixel sample. Matches unit_interpolate.pas:
+///        needs a 4x4 neighbourhood; the outer 2-pixel border samples as black.
+void bicubic_interpolate(const ImageArray& img, double x, double y,
                          std::array<float, 3>& pixel) {
-    // TODO: port from unit_interpolate.pas
-    pixel = {0.0f, 0.0f, 0.0f};
+    const auto width5    = static_cast<int>(img[0][0].size());
+    const auto height5   = static_cast<int>(img[0].size());
+    const auto nrcolours = static_cast<int>(img.size());
+
+    const auto int_x = static_cast<int>(std::floor(x));
+    const auto int_y = static_cast<int>(std::floor(y));
+    const auto dx = x - int_x;
+    const auto dy = y - int_y;
+
+    if (int_x <= 1 || int_x >= width5 - 2 || int_y <= 1 || int_y >= height5 - 2) {
+        pixel = {0.0f, 0.0f, 0.0f};
+        return;
+    }
+
+    for (int col = 0; col < nrcolours; ++col) {
+        std::array<double, 4> row{};
+        for (int i = -1; i <= 2; ++i) {
+            row[i + 1] = catmull_rom(img[col][int_y + i][int_x - 1],
+                                     img[col][int_y + i][int_x],
+                                     img[col][int_y + i][int_x + 1],
+                                     img[col][int_y + i][int_x + 2],
+                                     dx);
+        }
+        pixel[col] = static_cast<float>(
+            catmull_rom(row[0], row[1], row[2], row[3], dy));
+    }
 }
 
 // The calibration pipeline maintains these as globals.
@@ -1089,36 +1125,27 @@ void resize_img_loaded(double ratio) {
     }
     const auto w1 = head.width;
     const auto h1 = head.height;
-    const auto w2 = std::max(1, static_cast<int>(std::round(ratio * w1)));
-    const auto h2 = std::max(1, static_cast<int>(std::round(ratio * h1)));
+    const auto w2 = static_cast<int>(std::lround(ratio * w1));
+    const auto h2 = static_cast<int>(std::lround(ratio * h1));
+    if (w2 < 5) {
+        return;  // matches the original's guard against degenerate targets
+    }
 
-    // Bilinear resample into a fresh buffer, then swap in.
+    // Bicubic (Catmull-Rom) resample into a fresh buffer, then swap in. Matches
+    // the original resize_img_loaded (unit_stack.pas), which samples img_loaded
+    // at (fitsX/ratio, fitsY/ratio); the outer border samples as black.
     auto out = ImageArray{};
     out.assign(head.naxis3,
         std::vector<std::vector<float>>(h2, std::vector<float>(w2, 0.0f)));
 
-    for (auto c = 0; c < head.naxis3; ++c) {
-        for (auto y2 = 0; y2 < h2; ++y2) {
-            const auto sy = static_cast<double>(y2) / ratio;
-            const auto y0 = std::clamp(static_cast<int>(std::floor(sy)),
-                                       0, h1 - 1);
-            const auto y1 = std::min(y0 + 1, h1 - 1);
-            const auto fy = sy - y0;
-            for (auto x2 = 0; x2 < w2; ++x2) {
-                const auto sx = static_cast<double>(x2) / ratio;
-                const auto x0 = std::clamp(static_cast<int>(std::floor(sx)),
-                                           0, w1 - 1);
-                const auto x1 = std::min(x0 + 1, w1 - 1);
-                const auto fx = sx - x0;
-                const auto v00 = img_loaded[c][y0][x0];
-                const auto v10 = img_loaded[c][y0][x1];
-                const auto v01 = img_loaded[c][y1][x0];
-                const auto v11 = img_loaded[c][y1][x1];
-                out[c][y2][x2] = static_cast<float>(
-                    (1.0 - fx) * (1.0 - fy) * v00 +
-                    fx * (1.0 - fy) * v10 +
-                    (1.0 - fx) * fy * v01 +
-                    fx * fy * v11);
+    std::array<float, 3> colour{};
+    for (auto fitsY = 0; fitsY < h2; ++fitsY) {
+        const auto y = fitsY / ratio;
+        for (auto fitsX = 0; fitsX < w2; ++fitsX) {
+            const auto x = fitsX / ratio;
+            bicubic_interpolate(img_loaded, x, y, colour);
+            for (auto col = 0; col < head.naxis3; ++col) {
+                out[col][fitsY][fitsX] = colour[col];
             }
         }
     }
@@ -1361,6 +1388,64 @@ void analyse_image(const ImageArray& img,
     }
 }
 
+namespace {
+
+/// @brief Most common pixel value in a window — the modal background. Matches
+///        astap_main.pas mode(): ignores black (< 1) and near-saturated
+///        (>= max1 - 10) pixels. @p greylevels receives the count of distinct
+///        occupied bins; @p ellipse restricts the window to its inscribed
+///        ellipse (apply_most_common passes false).
+[[nodiscard]] int mode(const ImageArray& img, bool ellipse, int colorm,
+                       int xmin, int xmax, int ymin, int ymax, int max1,
+                       int& greylevels) {
+    const auto height3 = static_cast<int>(img[0].size());
+    const auto width3  = static_cast<int>(img[0][0].size());
+
+    max1 -= 10;  // do not measure saturated pixels
+    if (xmin < 0) xmin = 0;
+    if (xmax > width3 - 1) xmax = width3 - 1;
+    if (ymin < 0) ymin = 0;
+    if (ymax > height3 - 1) ymax = height3 - 1;
+    greylevels = 0;
+    if (max1 < 1) {
+        return 0;  // degenerate (very low datamax): empty histogram
+    }
+
+    auto histogram = std::vector<int>(static_cast<std::size_t>(max1) + 1, 0);
+
+    const auto centerX = (xmax + xmin) / 2.0;
+    const auto centerY = (ymax + ymin) / 2.0;
+    const auto a = (xmax - xmin - 1) / 2.0;
+    const auto b = (ymax - ymin - 1) / 2.0;
+
+    for (auto i = ymin; i <= ymax; ++i) {
+        for (auto j = xmin; j <= xmax; ++j) {
+            if (!ellipse ||
+                ((j - centerX) * (j - centerX) / (a * a) +
+                 (i - centerY) * (i - centerY) / (b * b) < 1.0)) {
+                const auto val = static_cast<int>(std::lround(img[colorm][i][j]));
+                if (val >= 1 && val < max1) {
+                    ++histogram[static_cast<std::size_t>(val)];
+                }
+            }
+        }
+    }
+
+    auto result = 0;
+    auto value_count = 0;
+    for (auto i = 1; i <= max1; ++i) {  // most common but ignore 0
+        const auto val = histogram[static_cast<std::size_t>(i)];
+        if (val != 0) ++greylevels;
+        if (val > value_count) {
+            value_count = val;
+            result = i;
+        }
+    }
+    return result;
+}
+
+}  // namespace
+
 ///----------------------------------------
 /// MARK: apply_most_common
 ///----------------------------------------
@@ -1374,16 +1459,7 @@ void apply_most_common(const ImageArray& sourc, ImageArray& dest,
     const auto colors3 = static_cast<int>(sourc.size());
     const auto height3 = static_cast<int>(sourc[0].size());
     const auto width3  = static_cast<int>(sourc[0][0].size());
-    
-    // `mode()` is defined in astap_main.pas; returns the most common
-    // value in the window. TODO: port and wire in.
-    auto mode_stub = [&]([[maybe_unused]] int k,
-                         [[maybe_unused]] int x0, [[maybe_unused]] int x1,
-                         [[maybe_unused]] int y0, [[maybe_unused]] int y1) -> int {
-        [[maybe_unused]] auto dm = datamax;
-        return 0;  // TODO: replace with real mode() port.
-    };
-    
+
     for (auto k = 0; k < colors3; ++k) {
         for (auto fitsY = 0;
              fitsY <= static_cast<int>(std::round((height3 - 1.0) / diameter)); ++fitsY) {
@@ -1391,9 +1467,11 @@ void apply_most_common(const ImageArray& sourc, ImageArray& dest,
                  fitsX <= static_cast<int>(std::round((width3 - 1.0) / diameter)); ++fitsX) {
                 auto x = fitsX * diameter;
                 auto y = fitsY * diameter;
-                auto most_common = mode_stub(k,
+                auto greylevels = 0;
+                auto most_common = mode(sourc, /*ellipse=*/false, k,
                     x - radius, x + radius - 1,
-                    y - radius, y + radius - 1);
+                    y - radius, y + radius - 1,
+                    static_cast<int>(datamax), greylevels);
                     
                 // Fill the tile with the modal value
                 for (auto i = -radius; i < radius; ++i) {

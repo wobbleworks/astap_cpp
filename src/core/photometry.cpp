@@ -30,6 +30,16 @@
 #include <string>
 #include <vector>
 
+// analyse_image lives in the stacking module (unit_stack.pas). calibrate_
+// photometry calls it to size the aperture/annulus, exactly as the original
+// astap_main does across the unit boundary. Declared here to avoid pulling the
+// full stacking header into core.
+namespace astap::stacking {
+void analyse_image(const ImageArray& img, const Header& head, double snr_min,
+                   int report_type, int& star_counter, Background& bck,
+                   double& hfd_median, std::string* csv_out);
+}  // namespace astap::stacking
+
 ///----------------------------------------
 namespace astap::core {
 ///----------------------------------------
@@ -43,9 +53,6 @@ double Smedian(std::vector<double>& data, int n);
 // self-contained at the type level; the linker resolves to the real
 // implementations once the rest of ASTAP++ is wired up. get_hist comes
 // from core/imaging.h (included above).
-void analyse_image(const ImageArray& img, Header& head, int snr_min,
-                   int report_mode,
-                   int& hfd_counter, Background& bck, double& hfd_med);
 void plot_and_measure_stars(const ImageArray& img,
                             std::vector<std::string>& memo, Header& head,
                             bool calibration, bool plot_stars,
@@ -554,7 +561,8 @@ void calibrate_photometry(const ImageArray& img,
             auto hfd_counter = 0;
             auto hfd_med = 0.0;
             auto bck_local = Background{};
-            analyse_image(img, head, 30, 0, hfd_counter, bck_local, hfd_med);
+            astap::stacking::analyse_image(img, head, 30.0, 0, hfd_counter,
+                                           bck_local, hfd_med, nullptr);
             
             if (hfd_med != 0) {
                 char buf[128];
