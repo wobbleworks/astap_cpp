@@ -117,16 +117,19 @@ void black_spot_filter(ImageArray& img);
 
 ///----------------------------------------
 ///  @brief Run the internal plate solver on an already-loaded image, then
-///         save an updated FITS/TIFF alongside the source.
-///  @param img Image to solve.
+///         persist the found WCS back into the frame's own file (FITS header
+///         rewrite in place; TIFF/PNG/JPG written out as a 16-bit TIFF).
+///  @param img Image to solve (solved on an internal copy; not modified).
 /// @param[in,out] hd Header updated with solution metadata.
-/// @param[in,out] memo Log lines.
-/// @return @c true iff both solving and saving succeeded.
+/// @param[in,out] memo Header/log lines carrying the solution.
+///  @param filename Path of the frame to write the solution back into.
+///  @return @c true iff both solving and saving succeeded.
 ///----------------------------------------
 
 [[nodiscard]] bool update_solution_and_save(const ImageArray& img,
                                             Header& hd,
-                                            std::vector<std::string>& memo);
+                                            std::vector<std::string>& memo,
+                                            const std::filesystem::path& filename);
                                             
 ///----------------------------------------
 ///  @brief Apply master dark and master flat to @p img if a matching

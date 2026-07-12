@@ -613,7 +613,7 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
             if (use_astrometry_internal) {
                 memo2_message("Preparing astrometric solution for interim file: " + filename2);
                 if (head.cd1_1 == 0.0) {
-                    solution = update_solution_and_save(img_loaded, head, astap::memo1_lines);
+                    solution = update_solution_and_save(img_loaded, head, astap::memo1_lines, filename2);
                 } else {
                     solution = true;
                 }

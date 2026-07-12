@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <numbers>
 #include <span>
@@ -20,9 +21,11 @@
 
 #include "../core/fits.h"
 #include "../core/globals.h"
+#include "../core/image_io.h"      // save_tiff16_secure (atomic memo→tiff writer)
 #include "../core/photometry.h"
-#include "../core/util.h"          // smedian (the CCDciel-style median helper)
+#include "../core/util.h"          // smedian, fits_file_name
 #include "../core/wcs.h"           // pixel_to_celestial (the real WCS projector)
+#include "../solving/astrometric_solving.h"  // the real internal plate solver
 
 ///----------------------------------------
 namespace astap::stacking {
@@ -87,35 +90,6 @@ void pixel_to_celestial(const Header& hd, double px, double py,
     // The real projector (TAN / SIP / DSS) lives in core/wcs.cpp; forward to it
     // so the analyse CSV gets true RA/Dec instead of zeros.
     astap::core::pixel_to_celestial(hd, px, py, formalism, ra, decl);
-}
-
-[[nodiscard]] bool solve_image([[maybe_unused]] const ImageArray& img,
-                               [[maybe_unused]] Header& hd,
-                               [[maybe_unused]] std::vector<std::string>& memo,
-                               [[maybe_unused]] bool b1,
-                               [[maybe_unused]] bool b2) {
-    // TODO: port from unit_astrometric_solving.pas
-    return false;
-}
-
-[[nodiscard]] bool fits_file_name([[maybe_unused]] const std::string& fn) {
-    // TODO: port from astap_main.pas
-    return false;
-}
-
-[[nodiscard]] bool savefits_update_header([[maybe_unused]] std::vector<std::string>& memo,
-                                          [[maybe_unused]] const std::string& fn) {
-    // TODO: port from astap_main.pas
-    return false;
-}
-
-[[nodiscard]] bool save_tiff16([[maybe_unused]] const ImageArray& img,
-                               [[maybe_unused]] std::vector<std::string>& memo,
-                               [[maybe_unused]] const std::string& fn,
-                               [[maybe_unused]] bool flipH,
-                               [[maybe_unused]] bool flipV) {
-    // TODO: port from image/tiff
-    return false;
 }
 
 /// @brief Catmull-Rom cubic spline through p1..p2 (p0/p3 shape the ends).
@@ -536,28 +510,27 @@ void black_spot_filter(ImageArray& img) {
 
 [[nodiscard]] bool update_solution_and_save(const ImageArray& img,
                                             Header& hd,
-                                            std::vector<std::string>& memo) {
+                                            std::vector<std::string>& memo,
+                                            const std::filesystem::path& filename) {
+    // Plate-solve the already-loaded interim frame with the internal solver,
+    // then persist the WCS back into the frame's own header so the alignment
+    // vector — and any later pass that reloads the file — can read it.
+    // solve_image bins/crops in place, so hand it a copy of the caller's image.
     auto img_copy = img;
-    
-    // TODO: `filename2` is a global; thread it through the API once
-    // astap_main is ported. Empty string means both save paths are
-    // unreachable for now.
-    const auto filename2 = std::string{};
-    
-    if (solve_image(img_copy, hd, memo, true, false)) {
-        auto result = false;
-        if (fits_file_name(filename2)) {
-            result = savefits_update_header(memo, filename2);
-        } else {
-            result = save_tiff16(img_copy, memo, filename2, false, false);
-        }
-        if (!result) {
-            // TODO: route through memo / logger.
-            memo.emplace_back("Write error !!" + filename2);
-        }
-        return result;
+    if (!astap::solving::solve_image(img_copy, hd, memo, /*get_hist=*/true,
+                                     /*check_patternfilter=*/false)) {
+        return false;
     }
-    return false;
+
+    // FITS keeps its pixels and rewrites the header in place; anything else
+    // (TIFF, PNG, JPG) is written out as a 16-bit TIFF carrying the header.
+    const bool ok = astap::core::fits_file_name(filename.string())
+        ? astap::core::savefits_update_header(memo, filename)
+        : astap::core::save_tiff16_secure(img_copy, memo, filename);
+    if (!ok) {
+        memo2_message("Write error !!" + filename.string());
+    }
+    return ok;
 }
 
 ///----------------------------------------
