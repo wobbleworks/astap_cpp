@@ -104,6 +104,39 @@ struct RunResult { int exit_code; std::string out; };
 	return 0.0;
 }
 
+/// @brief Copy the available M31 frames into a fresh temp dir (the pre-solve
+///        pass rewrites each frame's WCS in place, so the corpus is never used
+///        directly). Returns the dir, the quoted frame arg string, and count.
+struct Staged { fs::path dir; std::string frame_args; int count = 0; };
+
+[[nodiscard]] static Staged stage_m31(const std::string& tag) {
+	Staged s;
+	s.dir = fs::temp_directory_path() / ("astap_stack_" + tag);
+	fs::remove_all(s.dir);
+	fs::create_directories(s.dir);
+	for (const auto* n : {"M31_a.fits", "M31_b.fits", "M31_c.fits"}) {
+		auto src = kCorpusDir / n;
+		if (!fs::exists(src)) continue;
+		auto dst = s.dir / src.filename();
+		fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
+		s.frame_args += " " + q(dst.string());
+		++s.count;
+	}
+	return s;
+}
+
+/// @brief First integer following @p key in a raw FITS header block, or -1.
+[[nodiscard]] static int fits_header_int(const fs::path& file, std::string_view key) {
+	std::ifstream ifs(file, std::ios::binary);
+	std::string hdr(2880 * 4, '\0');
+	ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+	const auto p = hdr.find(key);
+	if (p == std::string::npos) return -1;
+	auto d = p + key.size();
+	while (d < hdr.size() && !std::isdigit(static_cast<unsigned char>(hdr[d]))) ++d;
+	try { return std::stoi(hdr.substr(d)); } catch (...) { return -1; }
+}
+
 TEST_CASE("batch stack registers frames and solves to the same field") {
 	if (!assets_available()) return;
 
@@ -178,4 +211,69 @@ TEST_CASE("batch stack registers frames and solves to the same field") {
 	CHECK(selected_stars(sv.out) > 300);
 
 	fs::remove_all(dir);
+}
+
+TEST_CASE("sigma-clip combine also aligns and solves to the same field") {
+	if (!assets_available()) return;
+	auto s = stage_m31("sigma");
+	if (s.count < 2) { MESSAGE("need >= 2 M31 frames — skipping"); return; }
+
+	const auto out = s.dir / "stack.fits";
+	const std::string db = " -d " + q(kDbDir.string());
+	const auto st = run(q(kPortBin) + " -stackfiles -sigmaclip -o " + q(out.string())
+	                    + db + s.frame_args);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "STACKED=") == "1");
+	CHECK(field(st.out, "FRAMES_COMBINED=") == std::to_string(s.count));
+	REQUIRE(fs::exists(out));
+
+	// The sigma-clip method must be recorded in the stacked header.
+	{
+		std::ifstream ifs(out, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("Stacking method SIGMA CLIP AVERAGE") != std::string::npos);
+	}
+
+	const auto base = s.dir / "solve";
+	const auto sv = run(q(kPortBin) + " -f " + q(out.string()) + db
+	                    + " -o " + q(base.string()));
+	auto ini = base; ini.replace_extension(".ini");
+	REQUIRE(fs::exists(ini));
+	CHECK(ini_value(ini, "CRVAL1=") == doctest::Approx(10.7).epsilon(0.05));
+	CHECK(ini_value(ini, "CRVAL2=") == doctest::Approx(41.24).epsilon(0.05));
+	CHECK(selected_stars(sv.out) > 300);
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("batch stack applies a master dark (calibration wiring)") {
+	if (!assets_available()) return;
+	auto s = stage_m31("dark");
+	if (s.count < 2) { MESSAGE("need >= 2 M31 frames — skipping"); return; }
+
+	// A separate master-dark file (a copy of one frame — the point here is that
+	// the calibration path fires and is recorded, not photometric correctness).
+	const auto dark = s.dir / "master_dark.fits";
+	fs::copy_file(kCorpusDir / "M31_a.fits", dark, fs::copy_options::overwrite_existing);
+
+	const auto out = s.dir / "stack.fits";
+	const std::string db = " -d " + q(kDbDir.string());
+	const auto st = run(q(kPortBin) + " -stackfiles -o " + q(out.string())
+	                    + " -dark " + q(dark.string()) + db + s.frame_args);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "STACKED=") == "1");
+	REQUIRE(fs::exists(out));
+
+	// The dark must be subtracted per frame and recorded: CALSTAT gains 'D'
+	// (then 'S' for stacked → "DS") and LUM_DARK counts the master applied.
+	{
+		std::ifstream ifs(out, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("CALSTAT = 'D") != std::string::npos);
+	}
+	CHECK(fits_header_int(out, "LUM_DARK=") >= 1);
+
+	fs::remove_all(s.dir);
 }

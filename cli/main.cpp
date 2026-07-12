@@ -150,6 +150,8 @@ struct Args {
     std::optional<int>         tofits_binning;
     std::optional<int>         sqm_pedestal;
     std::optional<std::string> stack_path;
+    std::optional<std::string> master_dark;   // -stackfiles master dark
+    std::optional<std::string> master_flat;   // -stackfiles master flat
     std::vector<std::filesystem::path> focus_files;
     std::string                raw_cmdline;
     // Positional argv remainder (Pascal treats non-option argv[1] as filename).
@@ -319,6 +321,8 @@ Args parse_args(int argc, char* argv[]) {
         if (try_value("tofits", [&](auto v){ out.tofits_binning = parse_int(v, 1); }))   continue;
         if (try_value("sqm",    [&](auto v){ out.sqm_pedestal = parse_int(v, 0); }))     continue;
         if (try_value("stack",  [&](auto v){ out.stack_path   = v; out.stack_mode = true; })) continue;
+        if (try_value("dark",   [&](auto v){ out.master_dark  = v; }))                   continue;
+        if (try_value("flat",   [&](auto v){ out.master_flat  = v; }))                   continue;
 
         // -focusN  (N = 1, 2, 3, ...)
         if (arg.starts_with("-focus") || arg.starts_with("--focus")) {
@@ -726,7 +730,11 @@ int main(int argc, char* argv[]) {
                                         : astap::stacking::StackMethod::Average;
         std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
                                              : std::filesystem::path{"stack.fits"};
-        const auto res = astap::stacking::stack_files(frames, method, out);
+        std::filesystem::path mdark = a.master_dark ? std::filesystem::path{*a.master_dark}
+                                                    : std::filesystem::path{};
+        std::filesystem::path mflat = a.master_flat ? std::filesystem::path{*a.master_flat}
+                                                    : std::filesystem::path{};
+        const auto res = astap::stacking::stack_files(frames, method, out, mdark, mflat);
         std::cout << std::format(
             "STACKED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_COMBINED={}\nOUTPUT={}\n",
             res.ok ? 1 : 0, res.frames_input, res.frames_solved,

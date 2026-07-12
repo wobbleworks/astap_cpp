@@ -53,11 +53,17 @@ struct StackResult {
 ///  @param frames Input light-frame paths (must be non-empty).
 ///  @param method Average or SigmaClip.
 ///  @param output Destination path for the stacked FITS.
+///  @param master_dark Optional master dark subtracted from every frame (empty
+///                     to skip). @param master_flat Optional master flat divided
+///                     out of every frame (empty to skip). Both are applied
+///                     per-frame by the combiner via @c apply_dark_and_flat.
 ///  @return Result with per-stage counts and an @c ok flag.
 ///----------------------------------------
 
 [[nodiscard]] StackResult stack_files(std::span<const std::filesystem::path> frames,
                                       StackMethod method,
-                                      const std::filesystem::path& output);
+                                      const std::filesystem::path& output,
+                                      const std::filesystem::path& master_dark = {},
+                                      const std::filesystem::path& master_flat = {});
 
 } // namespace

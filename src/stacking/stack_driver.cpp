@@ -116,10 +116,31 @@ void write_stacked_header(StackMethod method, int counterL) {
 
 StackResult stack_files(std::span<const std::filesystem::path> frames,
                         StackMethod method,
-                        const std::filesystem::path& output) {
+                        const std::filesystem::path& output,
+                        const std::filesystem::path& master_dark,
+                        const std::filesystem::path& master_flat) {
     StackResult r;
     r.frames_input = static_cast<int>(frames.size());
     if (frames.empty()) { r.message = "no input frames"; return r; }
+
+    // Load the optional master calibration frames into the resident dark/flat
+    // state. The combiner applies them per frame via apply_dark_and_flat.
+    if (!master_dark.empty()) {
+        MasterFrameInfo info{};
+        if (set_master_dark(master_dark, info)) {
+            memo2_message("Master dark loaded: " + master_dark.string());
+        } else {
+            memo2_message("Warning: could not load master dark " + master_dark.string());
+        }
+    }
+    if (!master_flat.empty()) {
+        MasterFrameInfo info{};
+        if (set_master_flat(master_flat, info)) {
+            memo2_message("Master flat loaded: " + master_flat.string());
+        } else {
+            memo2_message("Warning: could not load master flat " + master_flat.string());
+        }
+    }
 
     // ---- A + B: pre-solve pass -------------------------------------------
     // Load each frame; if it lacks a WCS, plate-solve it and persist the
