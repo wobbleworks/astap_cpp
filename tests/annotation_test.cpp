@@ -15,6 +15,8 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -467,4 +469,105 @@ TEST_CASE("layout_labels: no vertical space falls back to the anchor") {
 	REQUIRE(boxes.size() == 2);
 	CHECK(boxes[1].y1 == 100);
 	CHECK_FALSE(boxes[1].connector);
+}
+
+///----------------------------------------
+/// MARK: DeepSkyDatabase catalog loading
+///----------------------------------------
+
+namespace {
+
+/// Write @p contents to @p path, creating parent directories as needed.
+static void write_file(const std::filesystem::path& path, std::string_view contents) {
+	std::filesystem::create_directories(path.parent_path());
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+}
+
+/// A unique scratch directory for one test case, cleared on entry.
+static std::filesystem::path scratch_dir(std::string_view leaf) {
+	auto dir = std::filesystem::temp_directory_path() / "astappp_deepsky_test" / leaf;
+	std::error_code ec;
+	std::filesystem::remove_all(dir, ec);
+	std::filesystem::create_directories(dir);
+	return dir;
+}
+
+}  // anonymous namespace
+
+TEST_CASE("DeepSkyDatabase: loads a catalog and exposes its lines") {
+	const auto dir = scratch_dir("load");
+	write_file(dir / "deep_sky.csv",
+	           "header line 1\nheader line 2\n432000,0, M31/NGC224,178.0,63.0,35\n");
+
+	DeepSkyDatabase db;
+	CHECK(db.load(DeepSkyCatalog::DeepSky, dir) == CatalogLoadStatus::Loaded);
+	REQUIRE(db.resident().has_value());
+	CHECK(db.resident().value() == DeepSkyCatalog::DeepSky);
+	REQUIRE(db.lines().size() == 3);
+
+	// The resident lines feed read_deepsky directly.
+	auto objs = read_deepsky(db.lines(), DeepSkySearch::WithinField,
+	                         std::numbers::pi, 0.0, 0.1);
+	REQUIRE(objs.size() == 1);
+	CHECK(objs[0].name == "M31");
+}
+
+TEST_CASE("DeepSkyDatabase: re-requesting the resident catalog is a no-op") {
+	const auto dir = scratch_dir("cache");
+	write_file(dir / "deep_sky.csv",
+	           "header line 1\nheader line 2\n432000,0, M31,178.0,63.0,35\n");
+
+	DeepSkyDatabase db;
+	CHECK(db.load(DeepSkyCatalog::DeepSky, dir) == CatalogLoadStatus::Loaded);
+	CHECK(db.load(DeepSkyCatalog::DeepSky, dir) == CatalogLoadStatus::AlreadyLoaded);
+	CHECK(db.lines().size() == 3);
+}
+
+TEST_CASE("DeepSkyDatabase: switching catalogs reloads") {
+	const auto dir = scratch_dir("switch");
+	write_file(dir / "deep_sky.csv", "h1\nh2\n432000,0, M31,178.0,63.0,35\n");
+	write_file(dir / "hyperleda.csv", "h1\nh2\n432000,0, PGC1,10.0,5.0,0\n432000,0, PGC2,9.0,4.0,0\n");
+
+	DeepSkyDatabase db;
+	CHECK(db.load(DeepSkyCatalog::DeepSky, dir) == CatalogLoadStatus::Loaded);
+	CHECK(db.load(DeepSkyCatalog::HyperLeda, dir) == CatalogLoadStatus::Loaded);
+	CHECK(db.resident().value() == DeepSkyCatalog::HyperLeda);
+	CHECK(db.lines().size() == 4);
+}
+
+TEST_CASE("DeepSkyDatabase: a missing file reports NotFound and empties the database") {
+	const auto dir = scratch_dir("missing");
+	write_file(dir / "deep_sky.csv", "h1\nh2\n432000,0, M31,178.0,63.0,35\n");
+
+	DeepSkyDatabase db;
+	REQUIRE(db.load(DeepSkyCatalog::DeepSky, dir) == CatalogLoadStatus::Loaded);
+
+	// variable_stars.csv was never written.
+	CHECK(db.load(DeepSkyCatalog::Variable, dir) == CatalogLoadStatus::NotFound);
+	CHECK_FALSE(db.resident().has_value());
+	CHECK(db.lines().empty());
+}
+
+TEST_CASE("DeepSkyDatabase: a versioned catalog with the right header loads clean") {
+	const auto dir = scratch_dir("v003_ok");
+	write_file(dir / "variable_stars_13.csv",
+	           "V003 variable stars\nheader 2\n432000,0, 000-BBB-001,5.0,5.0,0\n");
+
+	DeepSkyDatabase db;
+	CHECK(db.load(DeepSkyCatalog::Variable13, dir) == CatalogLoadStatus::Loaded);
+	CHECK(db.resident().value() == DeepSkyCatalog::Variable13);
+}
+
+TEST_CASE("DeepSkyDatabase: a versioned catalog with an old header loads but reports Outdated") {
+	const auto dir = scratch_dir("v003_old");
+	write_file(dir / "variable_stars_15.csv",
+	           "V001 old variable stars\nheader 2\n432000,0, 000-CCC-001,5.0,5.0,0\n");
+
+	DeepSkyDatabase db;
+	// Data still resident (Pascal keeps it and only warns), status flags the age.
+	CHECK(db.load(DeepSkyCatalog::Variable15, dir) == CatalogLoadStatus::Outdated);
+	REQUIRE(db.resident().has_value());
+	CHECK(db.resident().value() == DeepSkyCatalog::Variable15);
+	CHECK(db.lines().size() == 3);
 }

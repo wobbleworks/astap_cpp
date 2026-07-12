@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <numbers>
 #include <optional>
 #include <span>
@@ -336,6 +337,65 @@ struct DeepSkyMatch {
 [[nodiscard]]
 std::optional<DeepSkyMatch> find_object(std::string_view object_name,
                                         std::span<const std::string> database_lines);
+
+// ---------------------------------------------------------------------------
+// Catalog loading
+// ---------------------------------------------------------------------------
+
+/// A named deep-sky / variable-star catalog installed beside the program.
+///
+/// Each value maps to one CSV file and mirrors the Pascal database_nr cache
+/// keys (1 = deep sky, 2 = HyperLeda, 3..5 = variable stars to limiting
+/// magnitude 11 / 13 / 15).
+enum class DeepSkyCatalog {
+	DeepSky,     ///< deep_sky.csv           (Pascal database_nr 1).
+	HyperLeda,   ///< hyperleda.csv          (2).
+	Variable,    ///< variable_stars.csv     (3), limiting magnitude 11.
+	Variable13,  ///< variable_stars_13.csv  (4), limiting magnitude 13.
+	Variable15,  ///< variable_stars_15.csv  (5), limiting magnitude 15.
+};
+
+/// Outcome of DeepSkyDatabase::load.
+enum class CatalogLoadStatus {
+	Loaded,         ///< File read fresh from disk.
+	AlreadyLoaded,  ///< The requested catalog was already resident (no reload).
+	NotFound,       ///< File missing or unreadable; the database is now empty.
+	Outdated,       ///< Loaded, but the header version predates the required one.
+};
+
+/// Loads a deep-sky / variable-star catalog once and keeps it resident.
+///
+/// The headless replacement for the Pascal load_deep / load_variable /
+/// load_hyperleda procedures and their shared deepstring + database_nr globals:
+/// load() reads the requested CSV into memory and remembers which catalog is
+/// resident, so asking for the same catalog again is a no-op.  The Pascal GUI
+/// side effects (message boxes, esc_pressed) collapse into the returned
+/// CatalogLoadStatus, and the resident lines() feed read_deepsky / plot_deepsky
+/// directly.
+class DeepSkyDatabase {
+public:
+	/// Ensure @p catalog is resident, reading it from @p base_path if needed.
+	///
+	/// @p base_path is the directory holding the CSV files (Pascal
+	/// database_path).  Returns AlreadyLoaded when the catalog is already in
+	/// memory; Loaded on a fresh read; NotFound (and empties the database) when
+	/// the file cannot be opened; Outdated when a versioned variable-star
+	/// catalog loads but its header predates the required version — in which
+	/// case the data stays resident, matching Pascal (which warns yet keeps it).
+	CatalogLoadStatus load(DeepSkyCatalog catalog,
+	                       const std::filesystem::path& base_path);
+
+	/// The resident catalog's lines (two header lines first, then records),
+	/// ready to pass to read_deepsky / plot_deepsky.  Empty when none loaded.
+	[[nodiscard]] std::span<const std::string> lines() const noexcept { return lines_; }
+
+	/// The catalog currently held in memory, or nullopt when empty.
+	[[nodiscard]] std::optional<DeepSkyCatalog> resident() const noexcept { return resident_; }
+
+private:
+	std::vector<std::string> lines_;
+	std::optional<DeepSkyCatalog> resident_;
+};
 
 // ---------------------------------------------------------------------------
 // Deep-sky field iteration

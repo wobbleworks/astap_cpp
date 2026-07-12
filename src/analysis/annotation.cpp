@@ -9,6 +9,8 @@
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string>
@@ -218,6 +220,83 @@ std::optional<DeepSkyMatch> find_object(std::string_view object_name,
 	}
 
 	return std::nullopt;
+}
+
+// ---------------------------------------------------------------------------
+// DeepSkyDatabase — catalog loading
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// On-disk file name and required header version for a catalog. An empty
+/// required_version means the catalog carries no version gate (Pascal only
+/// checks the magnitude-13 and -15 variable-star files).
+struct CatalogSpec {
+	std::string_view file_name;
+	std::string_view required_version;
+};
+
+CatalogSpec catalog_spec(DeepSkyCatalog catalog)
+{
+	switch (catalog) {
+		case DeepSkyCatalog::DeepSky:    return {"deep_sky.csv", {}};
+		case DeepSkyCatalog::HyperLeda:  return {"hyperleda.csv", {}};
+		case DeepSkyCatalog::Variable:   return {"variable_stars.csv", {}};
+		case DeepSkyCatalog::Variable13: return {"variable_stars_13.csv", "V003"};
+		case DeepSkyCatalog::Variable15: return {"variable_stars_15.csv", "V003"};
+	}
+	return {};  // unreachable; keeps the compiler happy
+}
+
+/// Read every line of a text file, dropping a trailing CR so CRLF catalogs
+/// parse identically to LF ones. Returns false when the file cannot be opened.
+bool read_lines(const std::filesystem::path& path, std::vector<std::string>& out)
+{
+	std::ifstream in(path, std::ios::binary);
+	if (!in.is_open()) return false;
+
+	out.clear();
+	std::string line;
+	while (std::getline(in, line)) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		out.push_back(std::move(line));
+	}
+	return true;
+}
+
+}  // anonymous namespace
+
+CatalogLoadStatus DeepSkyDatabase::load(DeepSkyCatalog catalog,
+                                        const std::filesystem::path& base_path)
+{
+	// Cache hit: the requested catalog is already resident (Pascal database_nr).
+	if (resident_ == catalog) return CatalogLoadStatus::AlreadyLoaded;
+
+	const CatalogSpec spec = catalog_spec(catalog);
+
+	std::vector<std::string> lines;
+	if (!read_lines(base_path / spec.file_name, lines)) {
+		// Pascal clears deepstring and abandons the load on any file error.
+		lines_.clear();
+		resident_.reset();
+		return CatalogLoadStatus::NotFound;
+	}
+
+	lines_ = std::move(lines);
+	resident_ = catalog;
+
+	// Versioned catalogs stay loaded even when out of date; the caller decides
+	// how to warn (Pascal shows a message box but keeps the data).
+	if (!spec.required_version.empty()) {
+		const std::string_view header = lines_.empty()
+		                              ? std::string_view{}
+		                              : std::string_view{lines_.front()};
+		if (header.substr(0, spec.required_version.size()) != spec.required_version)
+			return CatalogLoadStatus::Outdated;
+	}
+
+	return CatalogLoadStatus::Loaded;
 }
 
 // ---------------------------------------------------------------------------
