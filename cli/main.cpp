@@ -280,10 +280,13 @@ Args parse_args(int argc, char* argv[]) {
             }
         }
 
-        // Unknown -flag: Pascal's TApplication silently accepts; we pass
-        // through as positional so the caller sees where we stopped.
+        // Unknown -flag: match ASTAP/Lazarus, whose hasoption() simply returns
+        // false for options it doesn't recognise, so they are silently ignored.
+        // Imaging tools (NINA, APT, Ekos) pass benign extra flags; rejecting
+        // them with an error (exit 2) broke otherwise-valid solves. Drop the
+        // token and carry on — any following value falls through as positional.
         if (arg.starts_with('-')) {
-            throw ArgParseError{std::format("unrecognised option: {}", arg)};
+            continue;
         }
         out.positional.emplace_back(arg);
     }

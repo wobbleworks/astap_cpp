@@ -96,13 +96,25 @@ TEST_CASE("astap --help also works") {
 }
 
 ///----------------------------------------
-/// MARK: Unknown / missing args
+/// MARK: Unknown flags are silently ignored (ASTAP/Lazarus compatibility)
 ///----------------------------------------
 
-TEST_CASE("astap with unknown flag exits 2") {
+TEST_CASE("astap silently ignores an unknown flag") {
+	// ASTAP (Lazarus) ignores options it doesn't recognise; imaging tools like
+	// NINA, APT and Ekos pass benign extra flags. An unknown flag on its own
+	// leaves no work to do, so the CLI prints help and exits 0 — never exit 2.
 	const auto r = run_astap("--bogus-flag");
-	CHECK(r.exit_code == 2);
-	CHECK(r.stdout_text.find("unrecognised option") != std::string::npos);
+	CHECK(r.exit_code == 0);
+	CHECK(r.stdout_text.find("unrecognised option") == std::string::npos);
+}
+
+TEST_CASE("astap ignores an unknown flag but still honours real args") {
+	// The unknown flag must not short-circuit the rest of the command line:
+	// the -f path still runs and reports the missing file (exit 16), not a
+	// parse error (exit 2).
+	const auto r = run_astap("--bogus-flag -f /tmp/does_not_exist_astap_test.fit");
+	CHECK(r.exit_code == 16);
+	CHECK(r.stdout_text.find("unrecognised option") == std::string::npos);
 }
 
 ///----------------------------------------
