@@ -16,9 +16,12 @@
 
 #include "../types.h"
 
+#include <vector>
+
 namespace astap::analysis {
 
 using astap::StarList;
+using astap::ImageArray;
 
 /// A detected satellite streak described by the line Y = slope * X + intercept.
 struct Streak {
@@ -61,10 +64,36 @@ void trendline(const StarList& xylist, int len,
 void trendline_without_outliers(const StarList& xylist, int len,
                                 double& slope, double& intercept, double& sd);
 
-// TODO(astap-port): The `contour()` procedure from unit_contour.pas implements
-// Moore Neighbor Contour Tracing with Gaussian blur, background estimation,
-// and streak detection. It is deeply coupled to the Lazarus GUI
-// (mainwindow.image1.Canvas drawing, application.processmessages, etc.) and
-// needs a canvas-free refactor before it can be ported here.
+/// Core satellite-streak detector — the canvas-free heart of unit_contour.pas
+/// contour(). Runs Moore-Neighbor contour tracing over @p img_bk (a mono,
+/// already-blurred image), fills each traced blob's interior to measure its
+/// area, and reports blobs long and thin enough to be a streak: surface
+/// > 400 px, length > 200 px, length^2 / surface > 10, and a trendline fit
+/// with sigma < 10. Depends on nothing outside this file, so it is directly
+/// unit-testable.
+///
+/// @param img_bk          Mono, already-blurred image (channel 0 is used).
+/// @param detection_level Pixel threshold (sigmafactor * noise + background).
+/// @param binning         1 for mono/colour, 2 for a binned Bayer frame;
+///                        scales the reported intercept/sigma back to full res.
+/// @param detection_grid  Only start a trace from pixels on this coordinate
+///                        grid (<= 0 traces from every pixel).
+/// @return One @ref Streak per detected line, in full-resolution coordinates.
+[[nodiscard]] std::vector<Streak> detect_streaks(const ImageArray& img_bk,
+                                                 double detection_level,
+                                                 int binning,
+                                                 int detection_grid);
+
+/// Full streak detection matching unit_contour.pas contour(): converts a
+/// colour/Bayer @p img to mono, applies a Gaussian blur of radius @p blur,
+/// estimates the background/noise, then runs @ref detect_streaks with a
+/// threshold of @p sigmafactor * noise + background. Unlike the original — which
+/// blurs the shared image buffer in place — this leaves @p img untouched.
+///
+/// @param detection_grid Grid spacing (full-res); divided by the binning used.
+[[nodiscard]] std::vector<Streak> contour(const ImageArray& img,
+                                          astap::Header& head,
+                                          double blur, double sigmafactor,
+                                          int detection_grid = 400);
 
 }  // namespace astap::analysis
