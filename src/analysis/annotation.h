@@ -387,4 +387,100 @@ std::vector<DeepSkyObject> read_deepsky(std::span<const std::string> database_li
                                         double telescope_ra, double telescope_dec,
                                         double fov);
 
+// ---------------------------------------------------------------------------
+// Deep-sky overlay (headless projection of a catalog onto a solved image)
+// ---------------------------------------------------------------------------
+
+/// Marker shape chosen for a plotted deep-sky object.
+enum class DeepSkyMarker {
+	Dots,    ///< len <= 2: too small to outline, drawn as four corner dots.
+	Circle,  ///< len > 2 with unknown/degenerate PA: plain circle.
+	Galaxy,  ///< len > 2 with a known PA: oriented oval.
+};
+
+/// One catalog object projected onto a solved image by plot_deepsky.
+///
+/// Positions are in image pixels (0-based), after the default FITS->image
+/// vertical flip and any requested horizontal/vertical flips — i.e. exactly
+/// where the marker and label would be drawn.
+struct PlottedDeepSky {
+	double ra{};             ///< Right ascension (radians).
+	double dec{};            ///< Declination (radians).
+	int x{};                 ///< Marker centre X.
+	int y{};                 ///< Marker centre Y.
+	DeepSkyMarker marker{};  ///< Chosen marker shape.
+	double radius{};         ///< Object radius "len" in pixels.
+	double orientation{};    ///< Oval orientation in degrees (Galaxy only).
+	double axis_ratio{};     ///< Minor/major axis ratio (width/length).
+	int pen_width{};         ///< Outline pen width, min(4, max(1, round(len/70))).
+	std::string name;        ///< Composed designation ('/'-joined); empty if none.
+	bool has_label{};        ///< True when the centre is on-image and named.
+	int font_size{};         ///< Label point size, round(min(20, max(base, len/2))).
+	bool is_reference{};     ///< naam2 begins with '0' (AAVSO comparison star).
+};
+
+/// Project a deep-sky catalog onto a solved image, headless.
+///
+/// Mirrors unit_annotation.pas plot_deepsky but performs no drawing: it returns
+/// the placement of every catalog object that falls on (or just off) the image,
+/// so a caller can render or diff the result.  The field centre and radius come
+/// from @p head exactly as Pascal (image centre via pixel_to_celestial,
+/// fov = 1.5 * half-diagonal); read_deepsky then supplies candidates, which are
+/// projected with celestial_to_pixel, culled to a 25%-margin box, size-gated,
+/// flipped, and assigned a marker shape.
+///
+/// The label-collision layout is intentionally not applied here (it depends on
+/// font metrics the caller owns); feed the has_label entries to layout_labels.
+///
+/// @param head              Solved FITS header (needs naxis and cd1_1 set).
+/// @param database_lines    Loaded catalog lines (deep_sky/hyperleda/variable).
+/// @param variable_catalog  True for a variable-star catalog (Pascal db 3..5):
+///                          skips the large-FOV size gate.
+/// @param base_font_size    Minimum label point size (Pascal font_size arg).
+/// @param formalism         Projection formalism forwarded to pixel_to_celestial.
+/// @param flip_horizontal   Mirror X (Pascal flip_horizontal1 checkbox).
+/// @param flip_vertical     Suppress the default vertical flip (flip_vertical1).
+/// @return Placements in catalog order.
+[[nodiscard]]
+std::vector<PlottedDeepSky> plot_deepsky(const Header& head,
+                                         std::span<const std::string> database_lines,
+                                         bool variable_catalog = false,
+                                         int base_font_size = 8,
+                                         int formalism = 0,
+                                         bool flip_horizontal = false,
+                                         bool flip_vertical = false);
+
+/// A label to be placed by layout_labels: its anchor and text extent.
+struct LabelInput {
+	int x{};   ///< Anchor X (marker centre).
+	int y{};   ///< Anchor Y (marker centre).
+	int tw{};  ///< Text width in pixels.
+	int th{};  ///< Text height in pixels.
+};
+
+/// A resolved label box produced by layout_labels.
+struct LabelBox {
+	int x1{};          ///< Left.
+	int y1{};          ///< Top (after any downward shift).
+	int x2{};          ///< Right.
+	int y2{};          ///< Bottom.
+	bool connector{};  ///< True when the label moved and needs a leader line.
+};
+
+/// Resolve non-overlapping label positions, matching plot_deepsky exactly.
+///
+/// Labels are placed in order; each starts at its anchor, is clamped left off
+/// the right image edge, then shifted down by th/3 until it clears every
+/// previously placed box.  If it reaches the bottom edge it falls back to the
+/// anchor (with no leader line).  A label whose top moved from its anchor is
+/// flagged so the caller can draw a connector to the marker.
+///
+/// @param labels        Labels in draw order.
+/// @param image_width   Image width in pixels.
+/// @param image_height  Image height in pixels.
+/// @return One box per input label, in the same order.
+[[nodiscard]]
+std::vector<LabelBox> layout_labels(std::span<const LabelInput> labels,
+                                    int image_width, int image_height);
+
 }  // namespace astap::analysis

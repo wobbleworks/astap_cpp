@@ -162,6 +162,8 @@ astap_add_test(asteroid_test
 
 astap_add_test(annotation_test
     "${ASTAP_SRC}/analysis/annotation.cpp"
+    "${ASTAP_SRC}/core/wcs.cpp"           # plot_deepsky uses pixel/celestial projection
+    "${ASTAP_SRC}/core/util.cpp"          # strtofloat2 (via wcs ra/dec text parsers)
 )
 
 astap_add_test(inspector_test

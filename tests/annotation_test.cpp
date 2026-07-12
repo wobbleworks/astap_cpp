@@ -14,12 +14,62 @@
 #include "analysis/annotation.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <numbers>
 #include <string>
 #include <vector>
 
 using namespace astap::analysis;
 using astap::ImageArray;
+using astap::Header;
+
+///----------------------------------------
+/// MARK: Test-local stubs
+///
+/// plot_deepsky links core/wcs.cpp for pixel/celestial projection, which
+/// references a few externals (dsspos, EQU_GAL, calculate_az_alt_basic,
+/// position_angle). Provide no-op stubs so the TAN projection path links in
+/// isolation — same set the wcs_test target defines.
+///----------------------------------------
+
+namespace astap::core {
+
+void dsspos(double, double, double& ra, double& dec) { ra = 0; dec = 0; }
+void EQU_GAL(double, double, double& l, double& b)   { l  = 0; b   = 0; }
+bool calculate_az_alt_basic(double, double, double& az, double& alt) {
+	az = alt = 0;
+	return false;
+}
+double position_angle(double, double, double, double) { return 0.0; }
+
+}  // namespace astap::core
+
+///----------------------------------------
+/// MARK: Header helper
+///----------------------------------------
+
+/// @brief Build a 2000x2000 TAN header, 1 arcsec/px, centred on (ra0, dec0).
+[[nodiscard]] static Header make_tan_header(double ra0_rad, double dec0_rad) {
+	Header h{};
+	h.width  = 2000;
+	h.height = 2000;
+	h.naxis  = 2;
+	h.naxis3 = 1;
+	h.crpix1 = 1000.0;
+	h.crpix2 = 1000.0;
+	constexpr double arcsec_deg = 1.0 / 3600.0;
+	h.cdelt1 = -arcsec_deg;   // RA decreases with X, by convention
+	h.cdelt2 =  arcsec_deg;
+	h.ra0    = ra0_rad;
+	h.dec0   = dec0_rad;
+	h.crota1 = 0.0;
+	h.crota2 = 0.0;
+	h.cd1_1  = h.cdelt1;
+	h.cd1_2  = 0.0;
+	h.cd2_1  = 0.0;
+	h.cd2_2  = h.cdelt2;
+	return h;
+}
 
 ///----------------------------------------
 /// MARK: Font table dimensions
@@ -289,4 +339,132 @@ TEST_CASE("read_deepsky: skips the two header lines") {
 	                         std::numbers::pi, 0.0, 0.1);
 	REQUIRE(objs.size() == 1);
 	CHECK(objs[0].name == "REAL");
+}
+
+///----------------------------------------
+/// MARK: plot_deepsky projects an object at the field centre
+///----------------------------------------
+
+TEST_CASE("plot_deepsky: places a catalog object at the image centre") {
+	const auto head = make_tan_header(1.0, 0.3);
+
+	// One object encoded at (ra0, dec0) = (1.0, 0.3). RA unit = 2pi/864000,
+	// Dec unit = (pi/2)/324000. length 60 (0.1'), width 30, PA 45.
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"137510,61879, NGC7000,60.0,30.0,45"
+	};
+
+	auto plotted = plot_deepsky(head, db);
+	REQUIRE(plotted.size() == 1);
+
+	const auto& p = plotted[0];
+	CHECK(p.name == "NGC7000");
+	CHECK(p.has_label);
+	// Marker centre near the image centre; default vertical flip puts y at
+	// (height-1) - ~999 = ~1000.
+	CHECK(std::abs(p.x - 999) <= 2);
+	CHECK(std::abs(p.y - 1000) <= 2);
+	// len = 60 / (|cdelt2| * 60 * 10 * 2) = 60 / ((1/3600)*1200) = 180 px.
+	CHECK(p.radius == doctest::Approx(180.0).epsilon(1e-3));
+	CHECK(p.axis_ratio == doctest::Approx(0.5));
+	CHECK(p.marker == DeepSkyMarker::Galaxy);
+}
+
+///----------------------------------------
+/// MARK: plot_deepsky FOV exclusion
+///----------------------------------------
+
+TEST_CASE("plot_deepsky: excludes an object outside the field") {
+	const auto head = make_tan_header(1.0, 0.3);
+
+	// Same RA, but Dec offset by ~30 degrees — far outside the ~0.6 deg field.
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"137510,169879, FAR,60.0,30.0,45"
+	};
+
+	auto plotted = plot_deepsky(head, db);
+	CHECK(plotted.empty());
+}
+
+///----------------------------------------
+/// MARK: plot_deepsky requires a solution
+///----------------------------------------
+
+TEST_CASE("plot_deepsky: returns nothing without an astrometric solution") {
+	Header head{};  // naxis == 0, cd1_1 == 0
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"137510,61879, NGC7000,60.0,30.0,45"
+	};
+
+	auto plotted = plot_deepsky(head, db);
+	CHECK(plotted.empty());
+}
+
+///----------------------------------------
+/// MARK: layout_labels single label unchanged
+///----------------------------------------
+
+TEST_CASE("layout_labels: a lone label keeps its anchor") {
+	std::vector<LabelInput> labels = {{100, 100, 50, 20}};
+	auto boxes = layout_labels(labels, 2000, 2000);
+
+	REQUIRE(boxes.size() == 1);
+	CHECK(boxes[0].x1 == 100);
+	CHECK(boxes[0].y1 == 100);
+	CHECK(boxes[0].x2 == 150);
+	CHECK(boxes[0].y2 == 120);
+	CHECK_FALSE(boxes[0].connector);
+}
+
+///----------------------------------------
+/// MARK: layout_labels overlap shifts down + connector
+///----------------------------------------
+
+TEST_CASE("layout_labels: an overlapping label shifts down and gets a connector") {
+	// Two identical anchors: the second must move clear of the first.
+	std::vector<LabelInput> labels = {{100, 100, 50, 20}, {100, 100, 50, 20}};
+	auto boxes = layout_labels(labels, 2000, 2000);
+
+	REQUIRE(boxes.size() == 2);
+	// First stays put.
+	CHECK(boxes[0].y1 == 100);
+	CHECK_FALSE(boxes[0].connector);
+	// Second shifts down by th/3 (=6) until clear: 100->124.
+	CHECK(boxes[1].y1 == 124);
+	CHECK(boxes[1].connector);
+}
+
+///----------------------------------------
+/// MARK: layout_labels right-edge clamp
+///----------------------------------------
+
+TEST_CASE("layout_labels: a label past the right edge shifts left") {
+	std::vector<LabelInput> labels = {{1990, 100, 50, 20}};
+	auto boxes = layout_labels(labels, 2000, 2000);
+
+	REQUIRE(boxes.size() == 1);
+	CHECK(boxes[0].x2 == 2000);
+	CHECK(boxes[0].x1 == 1950);
+	CHECK_FALSE(boxes[0].connector);
+}
+
+///----------------------------------------
+/// MARK: layout_labels falls back to anchor with no vertical space
+///----------------------------------------
+
+TEST_CASE("layout_labels: no vertical space falls back to the anchor") {
+	// Short image: shifting down would cross the bottom, so the second label
+	// stays at its anchor (accepting overlap) with no connector.
+	std::vector<LabelInput> labels = {{100, 100, 50, 20}, {100, 100, 50, 20}};
+	auto boxes = layout_labels(labels, 2000, 130);
+
+	REQUIRE(boxes.size() == 2);
+	CHECK(boxes[1].y1 == 100);
+	CHECK_FALSE(boxes[1].connector);
 }

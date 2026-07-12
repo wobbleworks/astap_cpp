@@ -3,6 +3,8 @@
 
 #include "annotation.h"
 
+#include "../core/wcs.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -304,6 +306,195 @@ std::vector<DeepSkyObject> read_deepsky(std::span<const std::string> database_li
 	}
 
 	return results;
+}
+
+// ---------------------------------------------------------------------------
+// plot_deepsky
+// ---------------------------------------------------------------------------
+
+std::vector<PlottedDeepSky> plot_deepsky(const Header& head,
+                                         std::span<const std::string> database_lines,
+                                         bool variable_catalog,
+                                         int base_font_size,
+                                         int formalism,
+                                         bool flip_horizontal,
+                                         bool flip_vertical)
+{
+	std::vector<PlottedDeepSky> results;
+
+	// Need an image and an astrometric solution (Pascal: naxis<>0 and cd1_1<>0).
+	if (head.naxis == 0 || head.cd1_1 == 0.0) return results;
+
+	// Field centre from the image centre — robust to an off-centre CRPIX.
+	double telescope_ra = 0.0;
+	double telescope_dec = 0.0;
+	astap::core::pixel_to_celestial(head,
+	                                (head.width + 1) / 2.0, (head.height + 1) / 2.0,
+	                                formalism, telescope_ra, telescope_dec);
+
+	// Field of view with 50% extra, as a radius in radians.
+	const double half_w = 0.5 * head.width * head.cdelt1;
+	const double half_h = 0.5 * head.height * head.cdelt2;
+	const double fov = 1.5 * std::sqrt(half_w * half_w + half_h * half_h)
+	                 * std::numbers::pi / 180.0;
+
+	// Determinant sign flags a mirror-flipped image.
+	const double flipped =
+	    (head.cd1_1 * head.cd2_2 - head.cd1_2 * head.cd2_1 > 0.0) ? -1.0 : 1.0;
+
+	const auto objects = read_deepsky(database_lines, DeepSkySearch::WithinField,
+	                                  telescope_ra, telescope_dec, fov);
+
+	for (const auto& obj : objects) {
+		double fits_x = 0.0;
+		double fits_y = 0.0;
+		astap::core::celestial_to_pixel(head, obj.ra, obj.dec, fits_x, fits_y);
+
+		// FITS pixels are 1-based; the image array is 0-based.
+		int x = static_cast<int>(std::lround(fits_x - 1.0));
+		int y = static_cast<int>(std::lround(fits_y - 1.0));
+
+		// Cull to the image plus a 25% margin (pre-flip coordinates).
+		if (!(x > -0.25 * head.width && x <= 1.25 * head.width &&
+		      y > -0.25 * head.height && y <= 1.25 * head.height))
+			continue;
+
+		// Object radius in pixels; length is in 0.1-arcminute catalog units.
+		const double len = obj.length / (std::abs(head.cdelt2) * 60.0 * 10.0 * 2.0);
+
+		// Size gate: drop tiny objects on wide fields; variables always pass.
+		if (!(head.cdelt2 < 0.25 / 60.0 || len >= 1.0 || variable_catalog))
+			continue;
+
+		double gx_orientation = (obj.pa + head.crota2) * flipped;
+
+		if (flip_horizontal) {
+			x = (head.width - 1) - x;
+			gx_orientation = -gx_orientation;
+		}
+		if (flip_vertical)
+			gx_orientation = -gx_orientation;
+		else
+			y = (head.height - 1) - y;
+
+		PlottedDeepSky p;
+		p.ra = obj.ra;
+		p.dec = obj.dec;
+		p.x = x;
+		p.y = y;
+		p.radius = len;
+		p.orientation = gx_orientation;
+
+		// Compose a designation for identification (always, when named).
+		if (!obj.name.empty()) {
+			if (obj.name2.empty())
+				p.name = obj.name;
+			else if (obj.name3.empty())
+				p.name = obj.name + '/' + obj.name2;
+			else
+				p.name = obj.name + '/' + obj.name2 + '/' + obj.name3;
+			p.is_reference = (obj.name.front() == '0');
+		}
+
+		// A label is drawn only when the centre is on-image and named.
+		if (x >= 0 && x <= head.width - 1 && y >= 0 && y <= head.height - 1 &&
+		    !obj.name.empty()) {
+			p.has_label = true;
+			p.font_size = static_cast<int>(std::lround(std::min(
+			    20.0, std::max(static_cast<double>(base_font_size), len / 2.0))));
+		}
+
+		// Marker shape: a zero minor axis collapses to a circle.
+		double length1 = obj.length;
+		double width1 = obj.width;
+		double pa = obj.pa;
+		if (width1 == 0.0) {
+			width1 = length1;
+			pa = 999.0;
+		}
+
+		p.axis_ratio = (length1 != 0.0) ? (width1 / length1) : 1.0;
+		p.pen_width = static_cast<int>(
+		    std::min(4.0, std::max(1.0, std::round(len / 70.0))));
+
+		if (len <= 2.0)
+			p.marker = DeepSkyMarker::Dots;
+		else if (pa != 999.0)
+			p.marker = DeepSkyMarker::Galaxy;
+		else
+			p.marker = DeepSkyMarker::Circle;
+
+		results.push_back(std::move(p));
+	}
+
+	return results;
+}
+
+// ---------------------------------------------------------------------------
+// layout_labels
+// ---------------------------------------------------------------------------
+
+std::vector<LabelBox> layout_labels(std::span<const LabelInput> labels,
+                                    int image_width, int image_height)
+{
+	std::vector<LabelBox> boxes;
+	boxes.reserve(labels.size());
+
+	for (const auto& lab : labels) {
+		const int x = lab.x;
+		const int y = lab.y;
+		const int th = lab.th;
+
+		int x1 = x;
+		int y1 = y;
+		int x2 = x + lab.tw;
+		int y2 = y + th;
+
+		// Shift left when the text runs off the right edge.
+		if (x1 <= image_width && x2 > image_width) {
+			x1 -= (x2 - image_width);
+			x2 = image_width;
+		}
+
+		if (!boxes.empty()) {
+			bool overlap = false;
+			do {
+				overlap = false;
+				for (const LabelBox& b : boxes) {
+					const bool hit =
+					    (x1 >= b.x1 && x1 <= b.x2 && y1 >= b.y1 && y1 <= b.y2) ||
+					    (x2 >= b.x1 && x2 <= b.x2 && y1 >= b.y1 && y1 <= b.y2) ||
+					    (x1 >= b.x1 && x1 <= b.x2 && y2 >= b.y1 && y2 <= b.y2) ||
+					    (x2 >= b.x1 && x2 <= b.x2 && y2 >= b.y1 && y2 <= b.y2) ||
+					    (b.x1 >= x1 && b.x1 <= x2 && b.y1 >= y1 && b.y1 <= y2) ||
+					    (b.x2 >= x1 && b.x2 <= x2 && b.y2 >= y1 && b.y2 <= y2);
+					if (hit) {
+						overlap = true;
+						// Try shifting one third of a line down.
+						y1 += th / 3;
+						y2 += th / 3;
+						if (y2 >= image_height) {
+							// No vertical space: fall back to the anchor.
+							y1 = y;
+							y2 = y + th;
+							overlap = false;
+						}
+						break;  // Restart the scan from the first box.
+					}
+				}
+			} while (overlap);
+		}
+
+		LabelBox box;
+		box.x1 = x1;
+		box.y1 = y1;
+		box.x2 = x2;
+		box.y2 = y2;
+		box.connector = (y1 != y);
+		boxes.push_back(box);
+	}
+
+	return boxes;
 }
 
 }  // namespace astap::analysis
