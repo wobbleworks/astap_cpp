@@ -109,10 +109,12 @@ astap_add_test(wcs_test
 
 astap_add_test(star_align_test
 	"${ASTAP_SRC}/solving/star_align.cpp"
+	"${ASTAP_SRC}/core/util.cpp"          # smedian (find_fit median)
 )
 
 astap_add_test(star_database_test
 	"${ASTAP_SRC}/reference/star_database.cpp"
+	"memo2_test_stub.cpp"
 )
 
 astap_add_test(sqm_test
@@ -123,12 +125,14 @@ astap_add_test(sqm_test
 	"${ASTAP_SRC}/core/hjd.cpp"           # airmass_calc + calculate_az_alt
 	"${ASTAP_SRC}/core/imaging.cpp"       # histogram arrays
 	"${ASTAP_SRC}/core/ephemerides.cpp"  # precess_iau1976 (via hjd.cpp)
+	"memo2_test_stub.cpp"                 # no-op memo2_message
 )
 
 astap_add_test(photometry_calibration_test
 	"${ASTAP_SRC}/core/photometry.cpp"
 	"${ASTAP_SRC}/core/wcs.cpp"
 	"${ASTAP_SRC}/core/util.cpp"          # get_best_mean, smedian, mad_median
+	"memo2_test_stub.cpp"                 # no-op memo2_message
 )
 
 astap_add_test(imaging_test
@@ -137,6 +141,7 @@ astap_add_test(imaging_test
 	"${ASTAP_SRC}/core/link_stubs.cpp"
 	"${ASTAP_SRC}/core/util.cpp"
 	"${ASTAP_SRC}/stacking/raster_rotate.cpp"   # rotate_arbitrary delegates here
+	"memo2_test_stub.cpp"                        # no-op memo2_message
 )
 
 astap_add_test(image_sharpness_test

@@ -131,6 +131,7 @@ double search_radius_deg     = 180.0;
 double search_fov_deg        = 0.0;    // 0 = auto from header
 bool   force_oversize        = false;
 bool   add_sip               = false;
+bool   use_triples           = false;  // Pascal default (Sett.ReadBool 'use_triples', false)
 bool   check_pattern_filter  = false;
 
 /// MARK: Stacking settings

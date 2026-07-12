@@ -33,6 +33,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <string>
@@ -337,8 +338,11 @@ void print_help(std::ostream& os) {
 void apply_solver_overrides(const Args& a) {
     if (a.fov_deg)       { astap::search_fov_deg = *a.fov_deg; astap::fov_specified = true; }
     if (a.radius_deg)    { astap::search_radius_deg = *a.radius_deg; }
-    if (a.ra_hours)      { /* TODO: push into Header/head.ra0 once wired */ }
-    if (a.spd_deg)       { astap::head.dec0 = *a.spd_deg - 90.0; }
+    // -ra is in hours, -spd is south-pole-distance in degrees; head.ra0/dec0
+    // are the solver's start position in radians (same units the FITS loader
+    // stores). RA hours -> radians = h * 15 * pi/180; dec = (spd - 90) deg.
+    if (a.ra_hours)      { astap::head.ra0  = *a.ra_hours * 15.0 * std::numbers::pi / 180.0; }
+    if (a.spd_deg)       { astap::head.dec0 = (*a.spd_deg - 90.0) * std::numbers::pi / 180.0; }
     if (a.downsample)    { astap::downsample_setting = *a.downsample; }
     if (a.max_stars)     { astap::max_stars_setting = *a.max_stars; }
     if (a.tolerance)     { astap::quad_tolerance = *a.tolerance; }

@@ -197,8 +197,15 @@ static void pixel_to_sky(const Wcs& w, double px, double py, double& ra, double&
 /// @param must_solve when true, both binaries are expected to solve; when
 ///        false, only PLTSOLVD agreement is asserted (either both solve or
 ///        both fail).
+/// @param extra_args appended verbatim to both command lines (e.g. the
+///        `-ra`/`-spd`/`-r` start-position hint). Identical for both binaries,
+///        so any divergence is a port-vs-oracle behaviour difference.
+/// @param expect_unsolved when true, additionally asserts that neither binary
+///        solved — used by the bad-hint cases so the agreement check can't pass
+///        vacuously by both spuriously solving.
 static void solve_case(const std::string& name, const std::string& file,
-                       bool must_solve) {
+                       bool must_solve, const std::string& extra_args = "",
+                       bool expect_unsolved = false) {
 	if (!assets_available()) return;
 	auto img = corpus_image(file);
 	if (!img) return;
@@ -209,8 +216,9 @@ static void solve_case(const std::string& name, const std::string& file,
 	auto p_ini = p_in; p_ini.replace_extension(".ini");
 
 	const std::string db = " -d " + q(kDbDir.string());
-	(void)run(q(kOracleBin) + " -f " + q(o_in.string()) + db);
-	(void)run(q(kPortBin)   + " -f " + q(p_in.string()) + db);
+	const std::string extra = extra_args.empty() ? "" : (" " + extra_args);
+	(void)run(q(kOracleBin) + " -f " + q(o_in.string()) + db + extra);
+	(void)run(q(kPortBin)   + " -f " + q(p_in.string()) + db + extra);
 
 	REQUIRE_MESSAGE(fs::exists(o_ini), "oracle wrote no .ini at " << o_ini.string());
 	REQUIRE_MESSAGE(fs::exists(p_ini), "port wrote no .ini at " << p_ini.string());
@@ -219,6 +227,10 @@ static void solve_case(const std::string& name, const std::string& file,
 
 	MESSAGE(name << ": PLTSOLVD oracle=" << o.solved << " port=" << p.solved);
 	CHECK(o.solved == p.solved);
+	if (expect_unsolved) {
+		CHECK_MESSAGE(!o.solved, "oracle unexpectedly solved with a bad hint");
+		CHECK_MESSAGE(!p.solved, "port unexpectedly solved with a bad hint");
+	}
 
 	if (!o.solved || !p.solved) {
 		if (must_solve) { CHECK_MESSAGE(o.solved, "oracle failed to solve " << file);
@@ -269,4 +281,27 @@ TEST_CASE("solve: ngc_990 sparse field — both decline to solve") {
 	// Only ~1 solver star in this 600x600 frame; both must reach the same
 	// verdict (PLTSOLVD=F), not one solving while the other fails.
 	solve_case("ngc990i", "ngc_990.i.unconv.fits", /*must_solve=*/false);
+}
+
+// M31 lies at RA ~00h42.7m (0.712 h) / Dec ~+41.27deg, i.e. south-pole
+// distance (spd = 90 + dec) ~131.27deg. The two cases below drive the
+// start-position hint (-ra hours, -spd degrees) with a bounded search radius
+// and require identical verdicts from both binaries.
+
+TEST_CASE("solve: M31_a with correct -ra/-spd hint agrees with oracle") {
+	// A correct hint plus a tight radius must still solve. Guards the -spd
+	// units wiring: before the fix the port stored (spd-90) as a raw degree
+	// value in a radians field, seeding a nonsense declination that no search
+	// radius recovers — the port would fail here while the oracle solved.
+	solve_case("M31_a_hint", "M31_a.fits", /*must_solve=*/true,
+	           "-ra 0.712 -spd 131.27 -r 10");
+}
+
+TEST_CASE("solve: M31_a with wrong -ra hint — both decline to solve") {
+	// Correct declination hint but an RA 12h (180deg) away, inside a 5deg
+	// search radius. Both binaries must fail identically. Guards the -ra
+	// wiring: before the fix the port ignored -ra and kept the correct header
+	// RA, so it would solve while the oracle (honouring the bad hint) failed.
+	solve_case("M31_a_badra", "M31_a.fits", /*must_solve=*/false,
+	           "-ra 12.0 -spd 131.27 -r 5", /*expect_unsolved=*/true);
 }

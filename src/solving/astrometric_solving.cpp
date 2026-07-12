@@ -180,6 +180,7 @@ void populate_stackcfg_from_globals() {
     stackcfg.downsample_for_solving_index = astap::downsample_setting;
     stackcfg.force_oversize = astap::force_oversize;
     stackcfg.add_sip = astap::add_sip;
+    stackcfg.use_triples = astap::use_triples;
 }
 
 namespace {
@@ -1019,15 +1020,11 @@ bool solve_image(ImageArray& img, Header& hd,
             fov2     = fov_org;
         }
         
-        // limit = density * surface_of_full_image. Clamp to at least 30 so
-        // the detector still has room to find enough stars for quad matching
-        // on very tight fields (the Pascal cap lets this drop to 1 star on
-        // e.g. 2.5' PS1 cutouts with a 500/deg² local catalog). The catalog
-        // query further downstream respects the same cap, so raising the
-        // image-side floor costs nothing there.
-        const auto raw_limit = static_cast<int>(std::lround(
+        // limit = density * surface_of_full_image (stars per square degree ×
+        // image area). Matches the Pascal cap exactly — no lower clamp, so
+        // tight fields can legitimately drop max_stars to a handful.
+        const auto limit = static_cast<int>(std::lround(
             database_density * fov2 * fov2 * hd.width / hd.height));
-        const auto limit = std::max(30, raw_limit);
         if (limit < max_stars) {
             max_stars = limit;
             memo2_message(memo, "Database limit for this FOV is " +

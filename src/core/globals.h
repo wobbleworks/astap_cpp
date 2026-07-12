@@ -157,6 +157,7 @@ extern double search_radius_deg;           ///< @brief Search radius in degrees.
 extern double search_fov_deg;              ///< @brief Search FOV in degrees (0 = auto).
 extern bool   force_oversize;              ///< @brief Force oversize solving.
 extern bool   add_sip;                     ///< @brief Add SIP distortion to solution.
+extern bool   use_triples;                 ///< @brief Use triples (3 stars) for fields with < 30 stars.
 extern bool   check_pattern_filter;        ///< @brief Pattern filter check enabled.
 
 /// MARK: Stacking settings
