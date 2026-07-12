@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace astap::analysis {
 
@@ -335,5 +336,55 @@ struct DeepSkyMatch {
 [[nodiscard]]
 std::optional<DeepSkyMatch> find_object(std::string_view object_name,
                                         std::span<const std::string> database_lines);
+
+// ---------------------------------------------------------------------------
+// Deep-sky field iteration
+// ---------------------------------------------------------------------------
+
+/// A single deep-sky record returned by read_deepsky.
+///
+/// The three name fields mirror the Pascal naam2/naam3/naam4 globals: a record
+/// may carry one to three slash-separated designations, kept separate so the
+/// caller can build a display label however it likes.
+struct DeepSkyObject {
+	std::string name;    ///< Primary designation (Pascal naam2).
+	std::string name2;   ///< First alternate designation (naam3); empty if none.
+	std::string name3;   ///< Second alternate designation (naam4); empty if none.
+	double ra{};         ///< Right ascension (radians).
+	double dec{};        ///< Declination (radians).
+	double length{};     ///< Major axis, catalog units (0.1 arcminute).
+	double width{};      ///< Minor axis, catalog units (0.1 arcminute).
+	double pa{999.0};    ///< Position angle (degrees); 999 = unknown.
+};
+
+/// Search scope for read_deepsky.
+enum class DeepSkySearch {
+	WithinField,   ///< Return only objects inside the FOV disc (Pascal 'S').
+	FullDatabase,  ///< Return every record, ignoring the FOV gate (Pascal 'T').
+};
+
+/// Collect deep-sky records from a loaded catalog that fall within a field.
+///
+/// Mirrors unit_annotation.pas read_deepsky, but returns the full result set in
+/// one pass instead of streaming a single record per call through a global
+/// cursor.  The caller supplies the catalog lines — deep_sky.csv, hyperleda.csv
+/// and the variable-star CSVs all share this format — and the first two lines
+/// are treated as headers and skipped.
+///
+/// The field gate matches Pascal exactly: the RA offset is wrapped
+/// (delta_ra > pi is folded to 2*pi - delta_ra) and the small-angle metric is
+/// sqr(delta_ra * cos(dec0)) + sqr(dec - dec0), compared against sqr(fov).
+///
+/// @param database_lines  Pre-loaded catalog lines (headers first, then records).
+/// @param mode            WithinField applies the FOV gate; FullDatabase skips it.
+/// @param telescope_ra    Field-centre right ascension (radians).
+/// @param telescope_dec   Field-centre declination (radians).
+/// @param fov             Field radius (radians) used by the WithinField gate.
+/// @return All matching records, in catalog order.
+[[nodiscard]]
+std::vector<DeepSkyObject> read_deepsky(std::span<const std::string> database_lines,
+                                        DeepSkySearch mode,
+                                        double telescope_ra, double telescope_dec,
+                                        double fov);
 
 }  // namespace astap::analysis

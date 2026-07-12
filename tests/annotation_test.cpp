@@ -178,3 +178,115 @@ TEST_CASE("find_object: returns nullopt for missing object") {
 	auto result = find_object("M42", db);
 	CHECK_FALSE(result.has_value());
 }
+
+///----------------------------------------
+/// MARK: read_deepsky field parsing
+///----------------------------------------
+
+TEST_CASE("read_deepsky: parses a record inside the field") {
+	// RA 432000 -> pi rad; Dec 0 -> 0 rad.
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"432000,0, M31/NGC224,178.0,63.0,35"
+	};
+
+	auto objs = read_deepsky(db, DeepSkySearch::WithinField,
+	                         std::numbers::pi, 0.0, 0.1);
+	REQUIRE(objs.size() == 1);
+	CHECK(objs[0].name == "M31");
+	CHECK(objs[0].name2 == "NGC224");
+	CHECK(objs[0].name3.empty());
+	CHECK(objs[0].ra == doctest::Approx(std::numbers::pi).epsilon(1e-9));
+	CHECK(objs[0].dec == doctest::Approx(0.0).epsilon(1e-12));
+	CHECK(objs[0].length == doctest::Approx(178.0));
+	CHECK(objs[0].width == doctest::Approx(63.0));
+	CHECK(objs[0].pa == doctest::Approx(35.0));
+}
+
+///----------------------------------------
+/// MARK: read_deepsky FOV gate
+///----------------------------------------
+
+TEST_CASE("read_deepsky: FOV gate excludes distant objects") {
+	// First object at the field centre (pi, 0); second far away (0, pi/2).
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"432000,0, M31,178.0,63.0,35",
+		"0,324000, FAR,10.0,10.0,0"
+	};
+
+	auto objs = read_deepsky(db, DeepSkySearch::WithinField,
+	                         std::numbers::pi, 0.0, 0.1);
+	REQUIRE(objs.size() == 1);
+	CHECK(objs[0].name == "M31");
+}
+
+TEST_CASE("read_deepsky: FullDatabase ignores the FOV gate") {
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"432000,0, M31,178.0,63.0,35",
+		"0,324000, FAR,10.0,10.0,0"
+	};
+
+	auto objs = read_deepsky(db, DeepSkySearch::FullDatabase,
+	                         std::numbers::pi, 0.0, 0.1);
+	CHECK(objs.size() == 2);
+}
+
+///----------------------------------------
+/// MARK: read_deepsky RA wraparound
+///----------------------------------------
+
+TEST_CASE("read_deepsky: RA difference wraps across 0/2pi") {
+	// RA 863999 -> ~2pi, i.e. ~7.3e-6 rad short of a full turn.  A field
+	// centred at RA 0 must include it via the wrapped delta_ra fold.
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"863999,0, WRAP,10.0,5.0,0"
+	};
+
+	auto objs = read_deepsky(db, DeepSkySearch::WithinField,
+	                         0.0, 0.0, 0.001);
+	REQUIRE(objs.size() == 1);
+	CHECK(objs[0].name == "WRAP");
+}
+
+///----------------------------------------
+/// MARK: read_deepsky unknown position angle
+///----------------------------------------
+
+TEST_CASE("read_deepsky: unparseable PA maps to 999") {
+	std::vector<std::string> db = {
+		"header line 1",
+		"header line 2",
+		"432000,0, NOPA,10.0,5.0,"
+	};
+
+	auto objs = read_deepsky(db, DeepSkySearch::WithinField,
+	                         std::numbers::pi, 0.0, 0.1);
+	REQUIRE(objs.size() == 1);
+	CHECK(objs[0].pa == doctest::Approx(999.0));
+}
+
+///----------------------------------------
+/// MARK: read_deepsky skips header lines
+///----------------------------------------
+
+TEST_CASE("read_deepsky: skips the two header lines") {
+	// The first two lines look like valid records but must be treated as
+	// headers and skipped; only the third record is returned.
+	std::vector<std::string> db = {
+		"432000,0,HDR1,1,1,1",
+		"432000,0,HDR2,1,1,1",
+		"432000,0, REAL,10.0,5.0,35"
+	};
+
+	auto objs = read_deepsky(db, DeepSkySearch::WithinField,
+	                         std::numbers::pi, 0.0, 0.1);
+	REQUIRE(objs.size() == 1);
+	CHECK(objs[0].name == "REAL");
+}

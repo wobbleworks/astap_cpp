@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace astap::analysis {
 
@@ -215,6 +216,94 @@ std::optional<DeepSkyMatch> find_object(std::string_view object_name,
 	}
 
 	return std::nullopt;
+}
+
+// ---------------------------------------------------------------------------
+// read_deepsky
+// ---------------------------------------------------------------------------
+
+std::vector<DeepSkyObject> read_deepsky(std::span<const std::string> database_lines,
+                                        DeepSkySearch mode,
+                                        double telescope_ra, double telescope_dec,
+                                        double fov)
+{
+	std::vector<DeepSkyObject> results;
+
+	const double cos_dec0 = std::cos(telescope_dec);
+	const double fov2 = fov * fov;
+
+	// Records start at index 2, skipping the two header lines (Pascal linepos:=2).
+	for (size_t row = 2; row < database_lines.size(); ++row) {
+		const std::string_view line = database_lines[row];
+		size_t pos = 0;
+
+		// Field 1: RA as integer, unit = 0.1 s of time (RA 00:00 00.1 = 1).
+		const auto ra_field = next_field(line, pos);
+		int ra_int = 0;
+		{
+			auto [ptr, ec] = std::from_chars(ra_field.data(),
+			                                 ra_field.data() + ra_field.size(), ra_int);
+			(void)ptr;
+			if (ec != std::errc{}) continue;  // Pascal: fout<>0 -> skip line
+		}
+
+		// Field 2: Dec as integer, unit = 1 arcsec (DEC 00:00 01 = 1).
+		const auto dec_field = next_field(line, pos);
+		int dec_int = 0;
+		{
+			auto [ptr, ec] = std::from_chars(dec_field.data(),
+			                                 dec_field.data() + dec_field.size(), dec_int);
+			(void)ptr;
+			if (ec != std::errc{}) continue;
+		}
+
+		const double ra  = ra_int  * std::numbers::pi * 2.0 / 864000.0;
+		const double dec = dec_int * std::numbers::pi * 0.5 / 324000.0;
+
+		// Field gate: skip records outside the FOV disc (Pascal 'S' mode).
+		if (mode != DeepSkySearch::FullDatabase) {
+			double delta_ra = std::abs(ra - telescope_ra);
+			if (delta_ra > std::numbers::pi)
+				delta_ra = std::numbers::pi * 2.0 - delta_ra;
+			const double a = delta_ra * cos_dec0;
+			const double b = dec - telescope_dec;
+			if (a * a + b * b > fov2) continue;
+		}
+
+		// Field 3: name(s), slash-separated.
+		const auto names = parse_names(next_field(line, pos));
+
+		// Field 4: length (major axis), floating point.
+		const double length = parse_double(next_field(line, pos));
+
+		// Field 5: width (minor axis), floating point.
+		const double width = parse_double(next_field(line, pos));
+
+		// Field 6: position angle; PA=0 is valid, so an unparseable field
+		// (including empty) maps to 999 = unknown, matching Pascal.
+		const auto pa_field = next_field(line, pos);
+		double pa = 999.0;
+		{
+			double v = 0.0;
+			auto [ptr, ec] = std::from_chars(pa_field.data(),
+			                                 pa_field.data() + pa_field.size(), v);
+			(void)ptr;
+			if (ec == std::errc{}) pa = v;
+		}
+
+		DeepSkyObject obj;
+		obj.name   = std::string(names.naam2);
+		obj.name2  = std::string(names.naam3);
+		obj.name3  = std::string(names.naam4);
+		obj.ra     = ra;
+		obj.dec    = dec;
+		obj.length = length;
+		obj.width  = width;
+		obj.pa     = pa;
+		results.push_back(std::move(obj));
+	}
+
+	return results;
 }
 
 }  // namespace astap::analysis
