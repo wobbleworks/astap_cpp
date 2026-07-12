@@ -757,8 +757,11 @@ bool write_ini(const std::filesystem::path& filen,
     }
     
     f << "CMDLINE=" << astap::cmdline << '\n';
-    f << "DIMENSIONS=" << head.width << " x " << head.height << '\n';
-    
+
+    // Current ASTAP has dropped the older DIMENSIONS= line from the CLI .ini,
+    // but still emits the errorlevel ERROR= line and the trailing WARNING= line.
+    // (Verified against the astap_cli oracle: a sparse-field failure writes
+    // ERROR=Not enough stars. + WARNING=..., and no case emits DIMENSIONS.)
     switch (astap::errorlevel) {
         case 2:  f << "ERROR=Not enough stars.\n"; break;
         case 16: f << "ERROR=Error reading image file.\n"; break;
@@ -766,7 +769,7 @@ bool write_ini(const std::filesystem::path& filen,
         case 33: f << "ERROR=Error reading star database.\n"; break;
         default: break;
     }
-    
+
     if (!astap::warning_str.empty()) {
         f << "WARNING=" << astap::warning_str << '\n';
     }

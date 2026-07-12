@@ -30,7 +30,9 @@
 #include <fstream>
 #include <numbers>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 
 #if defined(_WIN32)
   #include <io.h>
@@ -104,7 +106,6 @@ struct Wcs {
 	bool   solved = false;
 	double crpix1{}, crpix2{}, crval1{}, crval2{};
 	double cd1_1{}, cd1_2{}, cd2_1{}, cd2_2{};
-	double width{}, height{};   // from the DIMENSIONS= line, when present
 };
 
 /// @brief Parse the solver .ini (PLTSOLVD + WCS keys). std::stod tolerates the
@@ -126,19 +127,46 @@ struct Wcs {
 		else if (line.rfind("CD1_2=", 0) == 0)  w.cd1_2  = val(line);
 		else if (line.rfind("CD2_1=", 0) == 0)  w.cd2_1  = val(line);
 		else if (line.rfind("CD2_2=", 0) == 0)  w.cd2_2  = val(line);
-		else if (line.rfind("DIMENSIONS=", 0) == 0) {
-			// Format: "DIMENSIONS=<w> x <h>".
-			const auto rhs = line.substr(line.find('=') + 1);
-			const auto xpos = rhs.find('x');
-			if (xpos != std::string::npos) {
-				try {
-					w.width  = std::stod(rhs.substr(0, xpos));
-					w.height = std::stod(rhs.substr(xpos + 1));
-				} catch (...) {}
-			}
-		}
 	}
 	return w;
+}
+
+/// @brief Collect the set of keys (text left of '=') from an .ini file.
+[[nodiscard]] static std::set<std::string> ini_keys(const fs::path& path) {
+	std::set<std::string> keys;
+	std::ifstream ifs(path);
+	std::string line;
+	while (std::getline(ifs, line)) {
+		const auto eq = line.find('=');
+		if (eq != std::string::npos && eq > 0) keys.insert(line.substr(0, eq));
+	}
+	return keys;
+}
+
+/// @brief Read NAXIS1/NAXIS2 from a FITS header. Current ASTAP no longer writes
+///        image dimensions to the .ini, so the differential grid sampling reads
+///        them straight from the source image instead. Returns false if absent.
+[[nodiscard]] static bool fits_dimensions(const fs::path& path, double& w, double& h) {
+	std::ifstream f(path, std::ios::binary);
+	if (!f) return false;
+	char card[80];
+	bool got_w = false, got_h = false;
+	// FITS headers are 80-byte cards; scan until END or a sane card cap.
+	for (int i = 0; i < 400 && f.read(card, sizeof card); ++i) {
+		const std::string_view c(card, sizeof card);
+		if (c.rfind("END     ", 0) == 0) break;
+		const auto parse = [&](std::string_view key, double& out) {
+			if (c.rfind(key, 0) != 0) return false;
+			const auto eq = c.find('=');
+			if (eq == std::string_view::npos) return false;
+			try { out = std::stod(std::string(c.substr(eq + 1))); return true; }
+			catch (...) { return false; }
+		};
+		if (!got_w && parse("NAXIS1  ", w)) got_w = true;
+		if (!got_h && parse("NAXIS2  ", h)) got_h = true;
+		if (got_w && got_h) return true;
+	}
+	return got_w && got_h;
 }
 
 /// @brief Project a pixel through a gnomonic (TAN) WCS to (ra, dec) radians.
@@ -225,6 +253,25 @@ static void solve_case(const std::string& name, const std::string& file,
 	const Wcs o = parse_ini(o_ini);
 	const Wcs p = parse_ini(p_ini);
 
+	// The port's .ini must carry exactly the oracle's key set. This guards
+	// against re-introducing a line current ASTAP dropped (DIMENSIONS=) or
+	// missing one it still emits (ERROR=, WARNING=). Only keys are compared:
+	// WCS values are checked separately, CMDLINE differs by path, and the
+	// WARNING= *text* can still differ on small images because the port and
+	// oracle choose different auto-binning branches (a separate parity item,
+	// tracked in PARITY_AUDIT.md — both here correctly decline to solve).
+	{
+		const auto o_keys = ini_keys(o_ini);
+		const auto p_keys = ini_keys(p_ini);
+		if (o_keys != p_keys) {
+			std::string only_o, only_p;
+			for (const auto& k : o_keys) if (!p_keys.count(k)) only_o += k + ' ';
+			for (const auto& k : p_keys) if (!o_keys.count(k)) only_p += k + ' ';
+			FAIL_CHECK(name << ": .ini key sets differ — oracle-only={" << only_o
+			                << "} port-only={" << only_p << "}");
+		}
+	}
+
 	MESSAGE(name << ": PLTSOLVD oracle=" << o.solved << " port=" << p.solved);
 	CHECK(o.solved == p.solved);
 	if (expect_unsolved) {
@@ -243,9 +290,11 @@ static void solve_case(const std::string& name, const std::string& file,
 	                                 p.crval1 * std::numbers::pi / 180.0,
 	                                 p.crval2 * std::numbers::pi / 180.0);
 	// Both WCS are sampled at the same pixels, so the exact image size only
-	// affects which corner of the field is probed. Take it from the .ini.
-	const double gw = p.width > 0 ? p.width : (o.width > 0 ? o.width : 1000.0);
-	const double gh = p.height > 0 ? p.height : (o.height > 0 ? o.height : 1000.0);
+	// affects which corner of the field is probed. Current ASTAP no longer puts
+	// dimensions in the .ini, so read them from the source FITS (fallback 1000).
+	double gw = 1000.0, gh = 1000.0;
+	double fw = 0.0, fh = 0.0;
+	if (fits_dimensions(*img, fw, fh) && fw > 0 && fh > 0) { gw = fw; gh = fh; }
 	const double grid = max_grid_sep(o, p, gw, gh);
 	const double so = scale_arcsec(o), sp = scale_arcsec(p);
 	const double scale_rel = std::abs(so - sp) / so;

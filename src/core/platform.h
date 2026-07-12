@@ -289,10 +289,16 @@ void save_settings(const std::string& path);
 
 ///----------------------------------------
 /// @brief Write the solver's .ini result file alongside @p filen.
-/// @details Extension is replaced with .ini. When @p solution is @c true,
-///          the WCS fields from the global header plus hfd/sqm/stars are
-///          emitted; when @c false only a PLTSOLVD=F marker + cmdline +
-///          error string are written.
+/// @details Extension is replaced with .ini. Matches current ASTAP's slimmed
+///          CLI .ini: when @p solution is @c true the WCS fields from the
+///          global header are emitted, plus SQM= (if computed) and HFD=/STARS=
+///          (only when the corresponding value is non-zero — the CLI solve path
+///          leaves them unset, so in practice they are omitted); when @c false
+///          only a PLTSOLVD=F marker is written. Both cases append CMDLINE=,
+///          then (for errorlevel 2/16/32/33) an ERROR= line and (if warning_str
+///          is set) a WARNING= line. Older ASTAP's DIMENSIONS= line is
+///          intentionally not written — current ASTAP dropped it (verified
+///          against the astap_cli oracle, which still emits ERROR=/WARNING=).
 /// @param filen       Base filepath (extension replaced with .ini).
 /// @param solution    Whether a valid plate solution was found.
 /// @param hfd_median  Median HFD value (0 to omit).
