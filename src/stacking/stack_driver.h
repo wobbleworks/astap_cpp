@@ -6,9 +6,9 @@
 ///            internal-astrometry alignment mode: pre-solve every input frame,
 ///            drop any that will not solve, align + combine the survivors with
 ///            the chosen combiner, and write a stacked FITS carrying the ASTAP
-///            stacked-header keyword block. Monochrome Average / Sigma-clip
-///            only for now; LRGB, OSC, master-calibration creation, mosaic and
-///            comet remain future work.
+///            stacked-header keyword block. Monochrome Average / Sigma-clip,
+///            master-calibration creation and LRGB colour combine are provided;
+///            OSC, mosaic and comet remain future work.
 ///    @author Ported from Han Kleijn's unit_stack.pas (ASTAP). MPL-2.0.
 /// @copyright Copyright (C) Han Kleijn / John Stephen. Mozilla Public License 2.0.
 ///----------------------------------------
@@ -107,5 +107,63 @@ struct MasterResult {
 [[nodiscard]] MasterResult create_master(std::span<const std::filesystem::path> frames,
                                          MasterKind kind,
                                          const std::filesystem::path& output);
+
+///----------------------------------------
+///  @brief Per-channel inputs for an LRGB colour combine.
+///  @details Each entry is a single, already-calibrated mono FITS for that
+///           filter — typically a per-filter interim produced by @ref stack_files
+///           (or a single exposure). @c rgb is an optional pre-combined
+///           one-shot-colour frame added on top, and @c luminance an optional
+///           lightness channel that modulates the chroma of the assembled RGB.
+///           Supply at least two of @c red / @c green / @c blue (the Pascal
+///           "minimum of two colours" rule); empty paths are skipped. The GUI's
+///           filter-name classification that groups raw lights into these
+///           channels is intentionally left to the caller (headless: hand in
+///           the per-channel frames you want combined).
+///----------------------------------------
+
+struct LrgbInputs {
+    std::filesystem::path red;
+    std::filesystem::path green;
+    std::filesystem::path blue;
+    std::filesystem::path luminance;   // optional lightness channel
+    std::filesystem::path rgb;         // optional pre-combined colour frame
+};
+
+///----------------------------------------
+///  @brief Outcome of an LRGB colour combine.
+///  @details @c channels_input counts the non-empty colour paths handed in,
+///           @c channels_combined how many the combiner actually merged, and
+///           @c reference is the frame used to fix the alignment grid (the
+///           luminance if present, else the first colour available).
+///----------------------------------------
+
+struct LrgbResult {
+    bool                  ok = false;
+    int                   channels_input = 0;
+    int                   channels_combined = 0;
+    bool                  has_luminance = false;
+    std::filesystem::path output;
+    std::filesystem::path reference;
+    std::string           message;
+};
+
+///----------------------------------------
+///  @brief Assemble a colour (LRGB) FITS from per-channel mono frames.
+///  @details Builds the reference/R/G/B/RGB/L slot array, aligns every channel
+///           to the reference with the internal astrometric solver (each channel
+///           is plate-solved and its solution persisted if it lacks a WCS),
+///           combines them with an identity colour matrix, optionally modulates
+///           the chroma by the luminance, and writes a 3-plane 32-bit-float FITS
+///           carrying the LRGB stacked-header keyword block. Ports the
+///           internal-astrometry path of @c stack_LRGB + the colour branch of
+///           Tstackmenu1.stack_button1Click (`unit_stack.pas`).
+///  @param inputs Per-channel frame paths (at least two colours required).
+///  @param output Destination path for the colour FITS.
+///  @return Result with per-channel counts and an @c ok flag.
+///----------------------------------------
+
+[[nodiscard]] LrgbResult combine_lrgb(const LrgbInputs& inputs,
+                                      const std::filesystem::path& output);
 
 } // namespace

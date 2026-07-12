@@ -565,8 +565,9 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
             if (!use_sip) {
                 a_order = 0;
             }
-            saturated_level = head.datamax_org * 0.97;
-            
+            saturated_level = head.datamax_org * 0.97;  // retained for parity; the
+            (void)saturated_level;                       // saturation marking is disabled upstream.
+
             if (c == 1) {
                 get_background(0, img_loaded, true, false, bck);
                 background_r = bck.backgr;
@@ -715,70 +716,51 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                         }
                         
                         if (c == 1) {
-                            // Red channel.
-                            value = img_loaded[0][fitsY][fitsX];
-                            if (value > saturated_level) {
-                                for (col = 0; col < 3; ++col) {
-                                    img_temp[col][y_new][x_new] = -9.0f;
-                                }
-                            } else {
-                                value = value - background_r;
-                                if (rr_factor > 1e-5) {
-                                    img_average[0][y_new][x_new] += static_cast<float>(rr_factor * value);
-                                    img_temp[0][y_new][x_new] += 1.0f;
-                                }
-                                if (rg_factor > 1e-5) {
-                                    img_average[1][y_new][x_new] += static_cast<float>(rg_factor * value);
-                                    img_temp[1][y_new][x_new] += 1.0f;
-                                }
-                                if (rb_factor > 1e-5) {
-                                    img_average[2][y_new][x_new] += static_cast<float>(rb_factor * value);
-                                    img_temp[2][y_new][x_new] += 1.0f;
-                                }
+                            // Red channel. (The saturation black-spot marking is
+                            // commented out upstream — unit_stack_routines.pas:639
+                            // — so every in-bounds pixel is accumulated.)
+                            value = img_loaded[0][fitsY][fitsX] - background_r;
+                            if (rr_factor > 1e-5) {
+                                img_average[0][y_new][x_new] += static_cast<float>(rr_factor * value);
+                                img_temp[0][y_new][x_new] += 1.0f;
+                            }
+                            if (rg_factor > 1e-5) {
+                                img_average[1][y_new][x_new] += static_cast<float>(rg_factor * value);
+                                img_temp[1][y_new][x_new] += 1.0f;
+                            }
+                            if (rb_factor > 1e-5) {
+                                img_average[2][y_new][x_new] += static_cast<float>(rb_factor * value);
+                                img_temp[2][y_new][x_new] += 1.0f;
                             }
                         } else if (c == 2) {
                             // Green channel.
-                            value = img_loaded[0][fitsY][fitsX];
-                            if (value > saturated_level) {
-                                for (col = 0; col < 3; ++col) {
-                                    img_temp[col][y_new][x_new] = -9.0f;
-                                }
-                            } else {
-                                value = value - background_g;
-                                if (gr_factor > 1e-5) {
-                                    img_average[0][y_new][x_new] += static_cast<float>(gr_factor * value);
-                                    img_temp[0][y_new][x_new] += 1.0f;
-                                }
-                                if (gg_factor > 1e-5) {
-                                    img_average[1][y_new][x_new] += static_cast<float>(gg_factor * value);
-                                    img_temp[1][y_new][x_new] += 1.0f;
-                                }
-                                if (gb_factor > 1e-5) {
-                                    img_average[2][y_new][x_new] += static_cast<float>(gb_factor * value);
-                                    img_temp[2][y_new][x_new] += 1.0f;
-                                }
+                            value = img_loaded[0][fitsY][fitsX] - background_g;
+                            if (gr_factor > 1e-5) {
+                                img_average[0][y_new][x_new] += static_cast<float>(gr_factor * value);
+                                img_temp[0][y_new][x_new] += 1.0f;
+                            }
+                            if (gg_factor > 1e-5) {
+                                img_average[1][y_new][x_new] += static_cast<float>(gg_factor * value);
+                                img_temp[1][y_new][x_new] += 1.0f;
+                            }
+                            if (gb_factor > 1e-5) {
+                                img_average[2][y_new][x_new] += static_cast<float>(gb_factor * value);
+                                img_temp[2][y_new][x_new] += 1.0f;
                             }
                         } else if (c == 3) {
                             // Blue channel.
-                            value = img_loaded[0][fitsY][fitsX];
-                            if (value > saturated_level) {
-                                for (col = 0; col < 3; ++col) {
-                                    img_temp[col][y_new][x_new] = -9.0f;
-                                }
-                            } else {
-                                value = value - background_b;
-                                if (br_factor > 1e-5) {
-                                    img_average[0][y_new][x_new] += static_cast<float>(br_factor * value);
-                                    img_temp[0][y_new][x_new] += 1.0f;
-                                }
-                                if (bg_factor > 1e-5) {
-                                    img_average[1][y_new][x_new] += static_cast<float>(bg_factor * value);
-                                    img_temp[1][y_new][x_new] += 1.0f;
-                                }
-                                if (bb_factor > 1e-5) {
-                                    img_average[2][y_new][x_new] += static_cast<float>(bb_factor * value);
-                                    img_temp[2][y_new][x_new] += 1.0f;
-                                }
+                            value = img_loaded[0][fitsY][fitsX] - background_b;
+                            if (br_factor > 1e-5) {
+                                img_average[0][y_new][x_new] += static_cast<float>(br_factor * value);
+                                img_temp[0][y_new][x_new] += 1.0f;
+                            }
+                            if (bg_factor > 1e-5) {
+                                img_average[1][y_new][x_new] += static_cast<float>(bg_factor * value);
+                                img_temp[1][y_new][x_new] += 1.0f;
+                            }
+                            if (bb_factor > 1e-5) {
+                                img_average[2][y_new][x_new] += static_cast<float>(bb_factor * value);
+                                img_temp[2][y_new][x_new] += 1.0f;
                             }
                         } else if (c == 4) {
                             // RGB image, naxis3=3.

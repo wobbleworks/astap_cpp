@@ -23,8 +23,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -124,6 +128,52 @@ struct Staged { fs::path dir; std::string frame_args; std::vector<fs::path> file
 		++s.count;
 	}
 	return s;
+}
+
+/// @brief Median of one plane of a 32-bit-float FITS, or NaN if unreadable.
+/// @details Minimal reader for the stacker's own output (BITPIX -32, big-endian,
+///          BZERO 0 / BSCALE 1): scans 2880-byte header blocks to END, then reads
+///          @p plane of NAXIS1×NAXIS2 floats. Used to prove the colour combine
+///          routed each channel into its own plane (distinct medians).
+[[nodiscard]] static double plane_median(const fs::path& file, int plane) {
+	std::ifstream ifs(file, std::ios::binary);
+	if (!ifs) return std::nan("");
+	std::string hdr;
+	int w = 0, h = 0, blocks = 0;
+	for (;;) {
+		std::string blk(2880, '\0');
+		ifs.read(blk.data(), 2880);
+		if (ifs.gcount() != 2880) return std::nan("");
+		hdr += blk;
+		++blocks;
+		if (blk.find("END     ") != std::string::npos) break;
+		if (blocks > 20) return std::nan("");
+	}
+	auto card_int = [&](std::string_view k) -> int {
+		auto p = hdr.find(k);
+		if (p == std::string::npos) return -1;
+		auto d = p + k.size();
+		while (d < hdr.size() && !std::isdigit(static_cast<unsigned char>(hdr[d]))
+		       && hdr[d] != '-') ++d;
+		try { return std::stoi(hdr.substr(d)); } catch (...) { return -1; }
+	};
+	w = card_int("NAXIS1  =");
+	h = card_int("NAXIS2  =");
+	if (w <= 0 || h <= 0) return std::nan("");
+	const std::size_t px = static_cast<std::size_t>(w) * h;
+	ifs.seekg(static_cast<std::streamoff>(blocks) * 2880
+	          + static_cast<std::streamoff>(plane) * px * 4);
+	std::vector<float> vals(px);
+	for (auto& v : vals) {
+		unsigned char b[4];
+		ifs.read(reinterpret_cast<char*>(b), 4);
+		if (ifs.gcount() != 4) return std::nan("");
+		const std::uint32_t u = (std::uint32_t(b[0]) << 24) | (std::uint32_t(b[1]) << 16)
+		                      | (std::uint32_t(b[2]) << 8) | std::uint32_t(b[3]);
+		std::memcpy(&v, &u, 4);
+	}
+	std::nth_element(vals.begin(), vals.begin() + px / 2, vals.end());
+	return vals[px / 2];
 }
 
 /// @brief First integer following @p key in a raw FITS header block, or -1.
@@ -307,6 +357,100 @@ TEST_CASE("reference frame is chosen by quality, not input order") {
 	// For the M31 set the sharpest frame is not the first input, so the chosen
 	// reference must differ from frame [0] of the forward order.
 	CHECK(ref_fwd != s.files.front().filename().string());
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("LRGB combine assembles a three-plane colour FITS from R/G/B frames") {
+	if (!assets_available()) return;
+	auto s = stage_m31("lrgb");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+
+	// No re-solve here: unlike the mono stack, an LRGB combine subtracts each
+	// channel's own background (faithful to unit_stack_routines.pas), which for a
+	// bright extended galaxy pushes the colour image below the solver's detection
+	// floor — the original ASTAP behaves the same. The alignment maths are the
+	// SAME astrometric_to_vector path the mono re-solve test already validates;
+	// here we validate the LRGB-specific colour assembly and header instead.
+	const auto out = s.dir / "colour.fits";
+	const std::string db = " -d " + q(kDbDir.string());
+	const auto lg = run(q(kPortBin) + " -lrgb -o " + q(out.string()) + db
+	                    + " -red "   + q(s.files[0].string())
+	                    + " -green " + q(s.files[1].string())
+	                    + " -blue "  + q(s.files[2].string()));
+	CHECK(lg.exit_code == 0);
+	CHECK(field(lg.out, "LRGB=") == "1");
+	CHECK(field(lg.out, "CHANNELS_IN=") == "3");
+	CHECK(field(lg.out, "CHANNELS_COMBINED=") == "3");
+	CHECK(field(lg.out, "LUMINANCE=") == "0");
+	// No luminance → the reference is the red channel (first colour available).
+	CHECK(fs::path(field(lg.out, "REFERENCE=")).filename() == s.files[0].filename());
+	REQUIRE(fs::exists(out));
+
+	// Header: a three-plane colour image, marked stacked. (The per-channel
+	// RED_CNT/GRN_CNT/BLU_CNT blocks are written only when the channel inputs
+	// carry LIGH_CNT — i.e. real per-filter interims; these raw corpus frames
+	// do not, so only the colour/stacked markers are asserted here.)
+	CHECK(fits_header_int(out, "NAXIS3  =") == 3);         // colour
+	CHECK(fits_header_int(out, "BITPIX  =") == -32);
+	{
+		std::ifstream ifs(out, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("CALSTAT = 'S")            != std::string::npos);  // stacked
+		CHECK(hdr.find("Combined to colour image") != std::string::npos);
+	}
+
+	// The identity colour matrix must route red→plane0, green→plane1, blue→plane2.
+	// The three source frames differ, so their planes must carry distinct data —
+	// a bug that dumped every channel into one plane would collapse this.
+	const double m0 = plane_median(out, 0);
+	const double m1 = plane_median(out, 1);
+	const double m2 = plane_median(out, 2);
+	REQUIRE(std::isfinite(m0));
+	REQUIRE(std::isfinite(m1));
+	REQUIRE(std::isfinite(m2));
+	CHECK(m0 != doctest::Approx(m1));
+	CHECK(m1 != doctest::Approx(m2));
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("LRGB combine with a luminance channel drives the chroma modulation") {
+	if (!assets_available()) return;
+	auto s = stage_m31("lrgbL");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+
+	// red/green/blue plus a luminance frame: the luminance slot re-weights the
+	// assembled chroma (c=5 branch) and is used as the alignment reference.
+	const auto out  = s.dir / "colourL.fits";
+	const auto outN = s.dir / "colourN.fits";  // same R/G/B, no luminance
+	const std::string db = " -d " + q(kDbDir.string());
+	const std::string rgb = " -red " + q(s.files[0].string())
+	                      + " -green " + q(s.files[1].string())
+	                      + " -blue " + q(s.files[2].string());
+	const auto lg = run(q(kPortBin) + " -lrgb -o " + q(out.string()) + db + rgb
+	                    + " -lum " + q(s.files[1].string()));
+	CHECK(lg.exit_code == 0);
+	CHECK(field(lg.out, "LRGB=") == "1");
+	CHECK(field(lg.out, "LUMINANCE=") == "1");
+	// Luminance present → it is the alignment reference.
+	CHECK(fs::path(field(lg.out, "REFERENCE=")).filename() == s.files[1].filename());
+	// R, G, B and L all contribute (the reference slot re-uses the L frame).
+	CHECK(field(lg.out, "CHANNELS_COMBINED=") == "4");
+	REQUIRE(fs::exists(out));
+	CHECK(fits_header_int(out, "NAXIS3  =") == 3);
+
+	// The luminance re-weighting must actually change the pixels: the same R/G/B
+	// without an L channel yields a different plane-0 median.
+	const auto ng = run(q(kPortBin) + " -lrgb -o " + q(outN.string()) + db + rgb);
+	CHECK(ng.exit_code == 0);
+	REQUIRE(fs::exists(outN));
+	const double lum0 = plane_median(out,  0);
+	const double raw0 = plane_median(outN, 0);
+	REQUIRE(std::isfinite(lum0));
+	REQUIRE(std::isfinite(raw0));
+	CHECK(lum0 != doctest::Approx(raw0));
 
 	fs::remove_all(s.dir);
 }

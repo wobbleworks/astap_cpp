@@ -134,6 +134,7 @@ struct Args {
     bool                       makedark = false;      // create a master dark
     bool                       makeflat = false;      // create a master flat
     bool                       makebias = false;      // create a master bias
+    bool                       lrgb = false;          // combine per-channel frames to colour
     std::optional<std::string> file;
     std::optional<double>      radius_deg;
     std::optional<double>      fov_deg;
@@ -155,6 +156,11 @@ struct Args {
     std::optional<std::string> stack_path;
     std::optional<std::string> master_dark;   // -stackfiles master dark
     std::optional<std::string> master_flat;   // -stackfiles master flat
+    std::optional<std::string> ch_red;        // -lrgb red channel
+    std::optional<std::string> ch_green;      // -lrgb green channel
+    std::optional<std::string> ch_blue;       // -lrgb blue channel
+    std::optional<std::string> ch_lum;        // -lrgb luminance channel
+    std::optional<std::string> ch_rgb;        // -lrgb pre-combined colour frame
     std::vector<std::filesystem::path> focus_files;
     std::string                raw_cmdline;
     // Positional argv remainder (Pascal treats non-option argv[1] as filename).
@@ -284,6 +290,7 @@ Args parse_args(int argc, char* argv[]) {
         if (take_flag(arg, "makedark"))   { out.makedark = true; continue; }
         if (take_flag(arg, "makeflat"))   { out.makeflat = true; continue; }
         if (take_flag(arg, "makebias"))   { out.makebias = true; continue; }
+        if (take_flag(arg, "lrgb"))       { out.lrgb = true; continue; }
 
         // Optional-value options. -sip disables on 'n' (else enables); -check
         // enables *only* on 'y' (bare -check is off in the CLI oracle);
@@ -329,6 +336,11 @@ Args parse_args(int argc, char* argv[]) {
         if (try_value("stack",  [&](auto v){ out.stack_path   = v; out.stack_mode = true; })) continue;
         if (try_value("dark",   [&](auto v){ out.master_dark  = v; }))                   continue;
         if (try_value("flat",   [&](auto v){ out.master_flat  = v; }))                   continue;
+        if (try_value("red",    [&](auto v){ out.ch_red       = v; }))                   continue;
+        if (try_value("green",  [&](auto v){ out.ch_green     = v; }))                   continue;
+        if (try_value("blue",   [&](auto v){ out.ch_blue      = v; }))                   continue;
+        if (try_value("lum",    [&](auto v){ out.ch_lum       = v; }))                   continue;
+        if (try_value("rgb",    [&](auto v){ out.ch_rgb       = v; }))                   continue;
 
         // -focusN  (N = 1, 2, 3, ...)
         if (arg.starts_with("-focus") || arg.starts_with("--focus")) {
@@ -768,6 +780,41 @@ int main(int argc, char* argv[]) {
             res.ok ? 1 : 0, res.frames_input, res.frames_solved,
             res.frames_combined, res.reference.string(), res.output.string());
         if (!res.ok) { std::cerr << "astap: stack failed: " << res.message << '\n'; }
+        return res.ok ? 0 : 1;
+    }
+
+    // 3a1) -lrgb: assemble a colour FITS from per-channel mono frames
+    //      (-red/-green/-blue, optional -lum/-rgb). Port superset — the CLI
+    //      oracle combines colours only via its GUI. -o names the output
+    //      (default lrgb.fits); -d/-D set the star database for the per-channel
+    //      pre-solve.
+    if (a.lrgb) {
+        astap::commandline_execution = true;
+        if (a.database_path) {
+            std::filesystem::path p(*a.database_path);
+            if (!p.empty()
+                && p.native().back() != std::filesystem::path::preferred_separator) {
+                p /= "";
+            }
+            astap::reference::database_path = p;
+        }
+        if (a.database_name) { astap::reference::name_database = *a.database_name; }
+
+        astap::stacking::LrgbInputs in;
+        if (a.ch_red)   in.red       = *a.ch_red;
+        if (a.ch_green) in.green     = *a.ch_green;
+        if (a.ch_blue)  in.blue      = *a.ch_blue;
+        if (a.ch_lum)   in.luminance = *a.ch_lum;
+        if (a.ch_rgb)   in.rgb       = *a.ch_rgb;
+        std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
+                                             : std::filesystem::path{"lrgb.fits"};
+        const auto res = astap::stacking::combine_lrgb(in, out);
+        std::cout << std::format(
+            "LRGB={}\nCHANNELS_IN={}\nCHANNELS_COMBINED={}\nLUMINANCE={}\n"
+            "REFERENCE={}\nOUTPUT={}\n",
+            res.ok ? 1 : 0, res.channels_input, res.channels_combined,
+            res.has_luminance ? 1 : 0, res.reference.string(), res.output.string());
+        if (!res.ok) { std::cerr << "astap: LRGB combine failed: " << res.message << '\n'; }
         return res.ok ? 0 : 1;
     }
 
