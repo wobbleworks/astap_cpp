@@ -118,6 +118,43 @@ TEST_CASE("astap ignores an unknown flag but still honours real args") {
 }
 
 ///----------------------------------------
+/// MARK: Optional-value options (-analyse/-extract/-sip/-check)
+///----------------------------------------
+
+TEST_CASE("astap -analyse with no snr value does not throw a parse error") {
+	// The CLI oracle reads getoptionvalue('analyse'); an empty value parses to 0
+	// and defaults to 30 — it never errors. A missing file then fails the load,
+	// so the exit code must be 16 (image load), never 2 (parse error).
+	const auto r = run_astap("-f /tmp/does_not_exist_astap_test.fit -analyse");
+	CHECK(r.exit_code == 16);
+	CHECK(r.stdout_text.find("requires a value") == std::string::npos);
+}
+
+TEST_CASE("astap -extract with no snr value does not throw a parse error") {
+	const auto r = run_astap("-f /tmp/does_not_exist_astap_test.fit -extract");
+	CHECK(r.exit_code == 16);
+	CHECK(r.stdout_text.find("requires a value") == std::string::npos);
+}
+
+TEST_CASE("astap -analyse does not swallow a following -f flag") {
+	// Lazarus scans options independently, so a trailing flag in the value slot
+	// is still honoured. "-analyse -f <file>" must therefore process -f (load
+	// failure → exit 16), not consume it as analyse's value and drop to the
+	// no-work help path (exit 0).
+	const auto r = run_astap("-analyse -f /tmp/does_not_exist_astap_test.fit");
+	CHECK(r.exit_code == 16);
+}
+
+TEST_CASE("astap -sip n and -check parse cleanly alongside real args") {
+	// The optional-value cluster must not turn a bare value ('n') into a stray
+	// positional or a parse error; the -f load failure still governs the exit.
+	const auto r = run_astap(
+		"-f /tmp/does_not_exist_astap_test.fit -sip n -check -analyse");
+	CHECK(r.exit_code == 16);
+	CHECK(r.stdout_text.find("requires a value") == std::string::npos);
+}
+
+///----------------------------------------
 /// MARK: Missing file → exit code 16
 ///----------------------------------------
 

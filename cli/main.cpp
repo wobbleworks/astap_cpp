@@ -116,7 +116,6 @@ namespace {
 struct Args {
     // Flags / options (only set when explicitly passed).
     bool                       help = false;
-    bool                       debug = false;
     bool                       file_specified = false;
     bool                       focus_request = false;
     bool                       analyse_specified = false;
@@ -193,6 +192,43 @@ std::optional<std::string> take_value(std::span<char* const> argv,
     return std::string{argv[i + 1]};
 }
 
+// Result of matching an option that MAY carry a value.
+struct OptValue {
+    bool                       matched = false;  // the option itself was present
+    std::optional<std::string> value;            // set only when a value followed
+};
+
+// Match an option ASTAP treats as *optional-value* (-analyse/-extract/-extract2/
+// -sip/-check). Accepts "-key" alone, "--key=val", or "-key val" where val is a
+// bare token. Unlike take_value it never throws, and it does NOT consume a
+// following -flag as the value: Lazarus scans each option independently, so a
+// trailing flag is still processed on its own pass. (Verified against the CLI
+// oracle: "-analyse -f img.fits" analyses img.fits rather than losing -f.)
+OptValue take_optional_value(std::span<char* const> argv,
+                             std::size_t            i,
+                             std::string_view       key,
+                             std::size_t&           advance_to) {
+    std::string_view arg = argv[i];
+    std::string_view raw = arg;
+    if (raw.starts_with("--")) raw.remove_prefix(2);
+    else if (raw.starts_with('-')) raw.remove_prefix(1);
+    else return {};
+
+    auto matched = match_key(raw, key);
+    if (!matched) return {};
+
+    advance_to = i + 1;
+    if (!matched->empty()) return {true, std::string{*matched}};   // --key=val
+    if (i + 1 < argv.size()) {
+        std::string_view next_tok = argv[i + 1];
+        if (!next_tok.starts_with('-')) {                          // -key val
+            advance_to = i + 2;
+            return {true, std::string{next_tok}};
+        }
+    }
+    return {true, std::nullopt};   // -key present with no value
+}
+
 bool take_flag(std::string_view arg, std::string_view key) {
     std::string_view raw = arg;
     if (raw.starts_with("--")) raw.remove_prefix(2);
@@ -231,13 +267,36 @@ Args parse_args(int argc, char* argv[]) {
         };
 
         if (take_flag(arg, "h") || take_flag(arg, "help")) { out.help = true; continue; }
-        if (take_flag(arg, "debug"))    { out.debug = true; continue; }
-        if (take_flag(arg, "check"))    { out.check = true; continue; }
-        if (take_flag(arg, "sip"))      { out.sip = true; continue; }
         if (take_flag(arg, "wcs"))      { out.wcs_output = true; continue; }
         if (take_flag(arg, "log"))      { out.log = true; continue; }
         if (take_flag(arg, "update"))   { out.update_input = true; continue; }
         if (take_flag(arg, "annotate")) { out.annotate = true; continue; }
+
+        // Optional-value options. -sip disables on 'n' (else enables); -check
+        // enables *only* on 'y' (bare -check is off in the CLI oracle);
+        // -analyse/-extract/-extract2 default snr to 30 when no value is given.
+        // A trailing -flag is never swallowed as the value (see take_optional_value).
+        if (auto ov = take_optional_value(av, i, "sip", next); ov.matched) {
+            out.sip = (ov.value.value_or("") != "n"); continue;
+        }
+        if (auto ov = take_optional_value(av, i, "check", next); ov.matched) {
+            out.check = (ov.value.value_or("") == "y"); continue;
+        }
+        if (auto ov = take_optional_value(av, i, "analyse", next); ov.matched) {
+            out.analyse_specified = true;
+            if (ov.value) out.analyse_snr = parse_double(*ov.value);
+            continue;
+        }
+        if (auto ov = take_optional_value(av, i, "extract2", next); ov.matched) {
+            out.extract2_specified = true;
+            if (ov.value) out.extract2_snr = parse_double(*ov.value);
+            continue;
+        }
+        if (auto ov = take_optional_value(av, i, "extract", next); ov.matched) {
+            out.extract_specified = true;
+            if (ov.value) out.extract_snr = parse_double(*ov.value);
+            continue;
+        }
 
         if (try_value("f",      [&](auto v){ out.file = v; out.file_specified = true; })) continue;
         if (try_value("r",      [&](auto v){ out.radius_deg   = parse_double(v); }))     continue;
@@ -252,9 +311,6 @@ Args parse_args(int argc, char* argv[]) {
         if (try_value("D",      [&](auto v){ out.database_name= v; }))                   continue;
         if (try_value("o",      [&](auto v){ out.output       = v; }))                   continue;
         if (try_value("speed",  [&](auto v){ out.speed        = v; }))                   continue;
-        if (try_value("analyse",[&](auto v){ out.analyse_snr  = parse_double(v); out.analyse_specified  = true; })) continue;
-        if (try_value("extract",[&](auto v){ out.extract_snr  = parse_double(v); out.extract_specified  = true; })) continue;
-        if (try_value("extract2",[&](auto v){out.extract2_snr = parse_double(v); out.extract2_specified = true; })) continue;
         if (try_value("tofits", [&](auto v){ out.tofits_binning = parse_int(v, 1); }))   continue;
         if (try_value("sqm",    [&](auto v){ out.sqm_pedestal = parse_int(v, 0); }))     continue;
         if (try_value("stack",  [&](auto v){ out.stack_path   = v; out.stack_mode = true; })) continue;
@@ -324,7 +380,6 @@ void print_help(std::ostream& os) {
         "\n"
         "Extra options:\n"
         "-annotate  {Produce deepsky annotated jpg file}\n"
-        "-debug  {Show GUI and stop prior to solving}  (GUI disabled in this build)\n"
         "-tofits  binning[1,2,3,4]  {Make new fits file from PNG/JPG file input}\n"
         "-sqm pedestal  {add measured sqm, centalt, airmass values to the solution}\n"
         "-focus1 file1.fit -focus2 file2.fit ....  {Find best focus using files and hyperbola curve fitting.\n"
@@ -647,7 +702,7 @@ int main(int argc, char* argv[]) {
     // 3) -stack live-stacking mode short-circuits everything else.
     if (a.stack_mode) { return run_stack(a); }
 
-    // Anything below requires -f, -debug, -focus1+, or a positional filename.
+    // Anything below requires -f, -focus1+, or a positional filename.
     if (!a.file_specified && !a.focus_request && a.positional.empty()) {
         // Pascal behaviour: no useful args -> just builds the gamma curve and
         // exits (for GUI reuse). In the CLI this means: print help briefly.
@@ -656,7 +711,7 @@ int main(int argc, char* argv[]) {
     }
 
     astap::commandline_execution = true;
-    astap::commandline_log = (a.debug || a.log);
+    astap::commandline_log = a.log;
     if (astap::commandline_log) astap::memo2_lines.push_back(astap::cmdline);
 
     // 4) Load the input image (if specified).
@@ -690,12 +745,8 @@ int main(int argc, char* argv[]) {
         return run_analyse(a, output_base, a.extract_specified);
     }
 
-    // 8) Full solve. -debug would normally reveal the GUI here; this CLI
-    //    build has no GUI, so debug falls through to a plain solve.
-    if (a.debug) {
-        std::cerr << "-debug: GUI not available in this build; running a "
-                     "plain solve instead.\n";
-    }
-
+    // 8) Full solve. (The GUI's -debug "show and stop" option has no CLI
+    //    counterpart in astap_cli, so a bare -debug is ignored like any other
+    //    unrecognised flag and the solve proceeds.)
     return run_solve(a, output_base);
 }
