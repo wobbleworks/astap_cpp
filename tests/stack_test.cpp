@@ -133,7 +133,9 @@ struct Staged { fs::path dir; std::string frame_args; int count = 0; };
 	const auto p = hdr.find(key);
 	if (p == std::string::npos) return -1;
 	auto d = p + key.size();
-	while (d < hdr.size() && !std::isdigit(static_cast<unsigned char>(hdr[d]))) ++d;
+	// Skip padding to the value; stop at a digit or a leading minus sign.
+	while (d < hdr.size() && !std::isdigit(static_cast<unsigned char>(hdr[d]))
+	       && hdr[d] != '-') ++d;
 	try { return std::stoi(hdr.substr(d)); } catch (...) { return -1; }
 }
 
@@ -274,6 +276,56 @@ TEST_CASE("batch stack applies a master dark (calibration wiring)") {
 		CHECK(hdr.find("CALSTAT = 'D") != std::string::npos);
 	}
 	CHECK(fits_header_int(out, "LUM_DARK=") >= 1);
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("master-frame creation averages raw frames into a mono FITS") {
+	if (!assets_available()) return;
+	auto s = stage_m31("mkdark");
+	if (s.count < 2) { MESSAGE("need >= 2 M31 frames — skipping"); return; }
+
+	const auto master = s.dir / "master_dark.fit";
+	const auto st = run(q(kPortBin) + " -makedark -o " + q(master.string()) + s.frame_args);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "MASTER=") == "1");
+	CHECK(field(st.out, "FRAMES_COMBINED=") == std::to_string(s.count));
+	REQUIRE(fs::exists(master));
+
+	// Master carries the combined count and is mono 32-bit float.
+	CHECK(fits_header_int(master, "DARK_CNT=") == s.count);
+	CHECK(fits_header_int(master, "NAXIS   =") == 2);       // any colour → mono
+	CHECK(fits_header_int(master, "BITPIX  =") == -32);
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("a created master dark can be applied when stacking") {
+	if (!assets_available()) return;
+	auto s = stage_m31("roundtrip");
+	if (s.count < 2) { MESSAGE("need >= 2 M31 frames — skipping"); return; }
+
+	// Build a master, then feed it back as the -dark for a stack. Content is
+	// irrelevant here — the point is the created master is a valid, loadable
+	// dark that the calibration path accepts (CALSTAT gains 'D').
+	const auto master = s.dir / "master_dark.fit";
+	const auto mk = run(q(kPortBin) + " -makedark -o " + q(master.string()) + s.frame_args);
+	CHECK(mk.exit_code == 0);
+	REQUIRE(fs::exists(master));
+
+	const auto out = s.dir / "stack.fits";
+	const std::string db = " -d " + q(kDbDir.string());
+	const auto st = run(q(kPortBin) + " -stackfiles -o " + q(out.string())
+	                    + " -dark " + q(master.string()) + db + s.frame_args);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "STACKED=") == "1");
+	REQUIRE(fs::exists(out));
+	{
+		std::ifstream ifs(out, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("CALSTAT = 'D") != std::string::npos);
+	}
 
 	fs::remove_all(s.dir);
 }

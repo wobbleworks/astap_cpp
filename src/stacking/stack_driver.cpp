@@ -108,7 +108,106 @@ void write_stacked_header(StackMethod method, int counterL) {
         " / Flat-darks used for luminance.                 ", head.flatdark_count);
 }
 
+///----------------------------------------
+///  @brief Mean-combine raw calibration frames into a mono image.
+///  @details Loads each frame into the resident head/memo state, sums it (colour
+///           input is reduced to mono via (R+G+B)/3), and divides by the count.
+///           Frames whose dimensions differ from the first are skipped. Ports the
+///           core of `average` (`unit_stack.pas:4814`); `temperature_avg` returns
+///           the mean set-temperature over the combined frames.
+///  @return Number of frames actually combined.
+///----------------------------------------
+
+[[nodiscard]] int average_frames(std::span<const std::filesystem::path> frames,
+                                 ImageArray& out_img, double& temperature_avg) {
+    out_img.clear();
+    temperature_avg = 0.0;
+    int count = 0, w = 0, h = 0;
+    ImageArray tmp;
+    for (const auto& path : frames) {
+        if (!astap::core::load_fits(path, /*light=*/false, /*load_data=*/true,
+                                    /*update_memo=*/true, /*get_ext=*/0,
+                                    astap::memo1_lines, astap::head, tmp)) {
+            memo2_message("Skipping unreadable frame: " + path.string());
+            continue;
+        }
+        if (count == 0) {
+            w = astap::head.width;
+            h = astap::head.height;
+            out_img.assign(1, std::vector<std::vector<float>>(
+                                  h, std::vector<float>(w, 0.0f)));
+        } else if (astap::head.width != w || astap::head.height != h) {
+            // The Pascal test is an OR (a latent typo that risks an out-of-bounds
+            // read); require both dimensions to match.
+            memo2_message("Skipping frame with mismatched dimensions: " + path.string());
+            continue;
+        }
+        const int nax3 = astap::head.naxis3;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                out_img[0][y][x] += (nax3 == 3)
+                    ? (tmp[0][y][x] + tmp[1][y][x] + tmp[2][y][x]) / 3.0f
+                    : tmp[0][y][x];
+            }
+        }
+        temperature_avg += astap::head.set_temperature;
+        ++count;
+    }
+    if (count > 1) {
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                out_img[0][y][x] /= static_cast<float>(count);
+            }
+        }
+    }
+    if (count > 0) { temperature_avg /= count; }
+    return count;
+}
+
 } // namespace
+
+///----------------------------------------
+/// MARK: create_master
+///----------------------------------------
+
+MasterResult create_master(std::span<const std::filesystem::path> frames,
+                           MasterKind kind,
+                           const std::filesystem::path& output) {
+    MasterResult r;
+    r.frames_input = static_cast<int>(frames.size());
+    if (frames.empty()) { r.message = "no input frames"; return r; }
+
+    ImageArray img;
+    double temperature_avg = 0.0;
+    const int count = average_frames(frames, img, temperature_avg);
+    r.frames_combined = count;
+    if (count == 0) { r.message = "no frame could be averaged"; return r; }
+
+    // The averaged master is mono; the header carried the last frame's cards.
+    auto& memo = astap::memo1_lines;
+    auto& head = astap::head;
+    head.naxis  = 2;
+    head.naxis3 = 1;
+
+    const std::string_view count_key =
+        kind == MasterKind::Dark ? "DARK_CNT="
+      : kind == MasterKind::Flat ? "FLAT_CNT=" : "BIAS_CNT=";
+    const std::string_view count_cmt =
+        kind == MasterKind::Dark ? " / Number of dark images combined                "
+      : kind == MasterKind::Flat ? " / Number of flat images combined                "
+                                 : " / Number of bias images combined                ";
+
+    astap::core::update_text(memo, "COMMENT 1", "  Written by ASTAP. www.hnsky.org");
+    astap::core::update_integer(memo, count_key, count_cmt, count);
+    astap::core::update_integer(memo, "CCD-TEMP=",
+        " / Average sensor temperature (Celsius)           ",
+        static_cast<int>(std::lround(temperature_avg)));
+
+    r.ok = astap::core::save_fits(img, memo, output, /*type1=*/-32, /*override2=*/true);
+    r.output  = output;
+    r.message = r.ok ? "ok" : "save failed";
+    return r;
+}
 
 ///----------------------------------------
 /// MARK: stack_files

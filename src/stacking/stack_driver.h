@@ -66,4 +66,45 @@ struct StackResult {
                                       const std::filesystem::path& master_dark = {},
                                       const std::filesystem::path& master_flat = {});
 
+///----------------------------------------
+///  @brief Kind of master calibration frame to create.
+///  @details Selects only the count keyword written (DARK_CNT / FLAT_CNT /
+///           BIAS_CNT); the combine itself is identical (a plain mean). A master
+///           flat needs no pre-normalisation — @c apply_dark_and_flat normalises
+///           it at application time from its centre.
+///----------------------------------------
+
+enum class MasterKind { Dark, Flat, Bias };
+
+///----------------------------------------
+///  @brief Outcome of a master-frame creation.
+///----------------------------------------
+
+struct MasterResult {
+    bool                  ok = false;
+    int                   frames_input = 0;
+    int                   frames_combined = 0;
+    std::filesystem::path output;
+    std::string           message;
+};
+
+///----------------------------------------
+///  @brief Mean-combine raw calibration frames into a mono master FITS.
+///  @details Loads each frame, converts any colour input to mono, averages them,
+///           and writes a 32-bit-float mono FITS carrying the @p kind count
+///           keyword plus the average CCD temperature. Frames whose dimensions
+///           differ from the first are skipped. Matches the core of the original
+///           `replace_by_master_dark`/`replace_by_master_flat` (`unit_stack.pas`);
+///           the GUI's exposure/temperature/gain classification is intentionally
+///           left to the caller (headless: supply the frames you want combined).
+///  @param frames Raw calibration-frame paths (must be non-empty).
+///  @param kind Dark, Flat or Bias — selects the count keyword written.
+///  @param output Destination path for the master FITS.
+///  @return Result with the combined-frame count and an @c ok flag.
+///----------------------------------------
+
+[[nodiscard]] MasterResult create_master(std::span<const std::filesystem::path> frames,
+                                         MasterKind kind,
+                                         const std::filesystem::path& output);
+
 } // namespace

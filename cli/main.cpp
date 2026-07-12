@@ -131,6 +131,9 @@ struct Args {
     bool                       stack_mode = false;
     bool                       stackfiles = false;   // batch-stack explicit frames
     bool                       sigmaclip = false;     // sigma-clip combine (else average)
+    bool                       makedark = false;      // create a master dark
+    bool                       makeflat = false;      // create a master flat
+    bool                       makebias = false;      // create a master bias
     std::optional<std::string> file;
     std::optional<double>      radius_deg;
     std::optional<double>      fov_deg;
@@ -278,6 +281,9 @@ Args parse_args(int argc, char* argv[]) {
         if (take_flag(arg, "annotate")) { out.annotate = true; continue; }
         if (take_flag(arg, "stackfiles")) { out.stackfiles = true; continue; }
         if (take_flag(arg, "sigmaclip"))  { out.sigmaclip = true; continue; }
+        if (take_flag(arg, "makedark"))   { out.makedark = true; continue; }
+        if (take_flag(arg, "makeflat"))   { out.makeflat = true; continue; }
+        if (take_flag(arg, "makebias"))   { out.makebias = true; continue; }
 
         // Optional-value options. -sip disables on 'n' (else enables); -check
         // enables *only* on 'y' (bare -check is off in the CLI oracle);
@@ -707,6 +713,27 @@ int main(int argc, char* argv[]) {
     astap::cmdline = a.raw_cmdline;
 
     if (a.help) { print_help(std::cout); return 0; }
+
+    // 3a0) -makedark/-makeflat/-makebias: mean-combine the positional raw
+    //      calibration frames into a mono master FITS (-o names the output).
+    //      Port superset — the CLI oracle builds masters only via its GUI.
+    if (a.makedark || a.makeflat || a.makebias) {
+        astap::commandline_execution = true;
+        std::vector<std::filesystem::path> frames(a.positional.begin(),
+                                                  a.positional.end());
+        const auto kind = a.makeflat ? astap::stacking::MasterKind::Flat
+                        : a.makebias ? astap::stacking::MasterKind::Bias
+                                     : astap::stacking::MasterKind::Dark;
+        const char* dflt = a.makeflat ? "master_flat.fit"
+                         : a.makebias ? "master_bias.fit" : "master_dark.fit";
+        std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
+                                             : std::filesystem::path{dflt};
+        const auto res = astap::stacking::create_master(frames, kind, out);
+        std::cout << std::format("MASTER={}\nFRAMES_IN={}\nFRAMES_COMBINED={}\nOUTPUT={}\n",
+            res.ok ? 1 : 0, res.frames_input, res.frames_combined, res.output.string());
+        if (!res.ok) { std::cerr << "astap: master creation failed: " << res.message << '\n'; }
+        return res.ok ? 0 : 1;
+    }
 
     // 3a) -stackfiles: batch-stack the positional frame files (port superset,
     //     not an oracle CLI option). Frames are the positional args; -o names
