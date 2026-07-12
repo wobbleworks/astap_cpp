@@ -26,6 +26,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <numbers>
@@ -33,6 +34,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #if defined(_WIN32)
   #include <io.h>
@@ -191,6 +193,22 @@ struct Wcs {
 	return got_w && got_h;
 }
 
+/// @brief Extract the "<N> stars, <M> quads selected in the image" counts from
+///        solver stdout. Returns nullopt when the line is absent (a declined
+///        solve prints no such line). The selected-star count is the direct
+///        output of the solver's find_stars, so it pins the detection parity.
+[[nodiscard]] static std::optional<std::pair<int, int>>
+parse_selected(const std::string& out) {
+	const auto pos = out.find("selected in the image");
+	if (pos == std::string::npos) return std::nullopt;
+	const auto ls = out.rfind('\n', pos);
+	const std::size_t start = (ls == std::string::npos) ? 0 : ls + 1;
+	int stars = 0, quads = 0;
+	if (std::sscanf(out.c_str() + start, "%d stars, %d quads", &stars, &quads) == 2)
+		return std::make_pair(stars, quads);
+	return std::nullopt;
+}
+
 /// @brief Project a pixel through a gnomonic (TAN) WCS to (ra, dec) radians.
 static void pixel_to_sky(const Wcs& w, double px, double py, double& ra, double& dec) {
 	constexpr double d2r = std::numbers::pi / 180.0;
@@ -267,8 +285,8 @@ static void solve_case(const std::string& name, const std::string& file,
 
 	const std::string db = " -d " + q(kDbDir.string());
 	const std::string extra = extra_args.empty() ? "" : (" " + extra_args);
-	(void)run(q(kOracleBin) + " -f " + q(o_in.string()) + db + extra);
-	(void)run(q(kPortBin)   + " -f " + q(p_in.string()) + db + extra);
+	const auto o_run = run(q(kOracleBin) + " -f " + q(o_in.string()) + db + extra);
+	const auto p_run = run(q(kPortBin)   + " -f " + q(p_in.string()) + db + extra);
 
 	REQUIRE_MESSAGE(fs::exists(o_ini), "oracle wrote no .ini at " << o_ini.string());
 	REQUIRE_MESSAGE(fs::exists(p_ini), "port wrote no .ini at " << p_ini.string());
@@ -307,6 +325,21 @@ static void solve_case(const std::string& name, const std::string& file,
 		if (must_solve) { CHECK_MESSAGE(o.solved, "oracle failed to solve " << file);
 		                  CHECK_MESSAGE(p.solved, "port failed to solve " << file); }
 		return;
+	}
+
+	// Detection parity: the "<N> stars, <M> quads selected in the image" line is
+	// the direct output of the solver's find_stars. The selected-star count must
+	// match the oracle exactly — this pins the hot-pixel cross-check / centroid
+	// recheck / border-margin reconciliation in star_align.cpp (before the fix
+	// the port found 509 vs the oracle's 501 on M31_a). Quad building sorts by
+	// inter-star distance, so a single tie can shift the quad count by one across
+	// implementations — allow a small tolerance there.
+	if (auto os = parse_selected(o_run.stdout_text),
+	         ps = parse_selected(p_run.stdout_text); os && ps) {
+		MESSAGE(name << ": selected oracle=" << os->first << " stars/" << os->second
+		             << " quads  port=" << ps->first << " stars/" << ps->second << " quads");
+		CHECK(os->first == ps->first);
+		CHECK(std::abs(os->second - ps->second) <= 2);
 	}
 
 	const double centre = sep_arcsec(o.crval1 * std::numbers::pi / 180.0,

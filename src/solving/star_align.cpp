@@ -810,8 +810,11 @@ void find_stars(const ImageArray& img, double hfd_min, double hfd_max,
             std::fill(row.begin(), row.end(), -1.0f);
         }
 
-        for (int fitsY = 0; fitsY < height2 - 1; ++fitsY) {
-            for (int fitsX = 0; fitsX < width2 - 1; ++fitsX) {
+        // Stay one pixel away from the borders so the hot-pixel cross-check
+        // can sample the four neighbours safely (matches the Pascal
+        // find_stars_routine(1, width-2, 1, height-2)).
+        for (int fitsY = 1; fitsY < height2 - 1; ++fitsY) {
+            for (int fitsX = 1; fitsX < width2 - 1; ++fitsX) {
                 if (img_sa[0][fitsY][fitsX] > 0.0f) {
                     continue;
                 }
@@ -819,11 +822,33 @@ void find_stars(const ImageArray& img, double hfd_min, double hfd_max,
                     continue;
                 }
 
+                // Reject isolated hot pixels: require at least two of the four
+                // cross-neighbours to also sit above 4x the noise level, so a
+                // lone bright pixel (a star needs >= 3 illuminated pixels) is
+                // not promoted to a detection.
+                int starpixels = 0;
+                if (img[0][fitsY][fitsX - 1] - bck.backgr > 4 * bck.noise_level) ++starpixels;
+                if (img[0][fitsY][fitsX + 1] - bck.backgr > 4 * bck.noise_level) ++starpixels;
+                if (img[0][fitsY - 1][fitsX] - bck.backgr > 4 * bck.noise_level) ++starpixels;
+                if (img[0][fitsY + 1][fitsX] - bck.backgr > 4 * bck.noise_level) ++starpixels;
+                if (starpixels < 2) {
+                    continue;
+                }
+
                 astap::core::HfdResult r;
                 astap::core::HFD(img, fitsX, fitsY, rs,
                     /*aperture_small=*/99.0, /*adu_e=*/0.0,
                     /*xbinning=*/1.0, r, scratch);
-                if (r.hfd <= hfd_max && r.snr > 10.0 && r.hfd > hfd_min) {
+                // Also require the measured centroid not to land inside a star
+                // area already marked this pass (a neighbour may resolve to the
+                // same centre). Out-of-image centroids are treated as free.
+                const int yc_i = static_cast<int>(std::lround(r.yc));
+                const int xc_i = static_cast<int>(std::lround(r.xc));
+                const bool center_free =
+                    yc_i < 0 || xc_i < 0 || yc_i >= height2 || xc_i >= width2
+                    || img_sa[0][yc_i][xc_i] <= 0.0f;
+                if (r.hfd <= hfd_max && r.snr > 10.0 && r.hfd > hfd_min
+                        && center_free) {
                     // Mark the whole circular star area as occupied to prevent
                     // double detections. 3*HFD matches the Pascal original; a
                     // star PSF has larger wings than a Gaussian predicts, so a
