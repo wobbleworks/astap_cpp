@@ -473,7 +473,9 @@ bool load_xisf(const std::filesystem::path& filen,
     auto set_temp = 0.0;
     extract_double_keyword(aline, "CCD-TEMP", set_temp);
     extract_double_keyword(aline, "SET-TEMP", set_temp);
-    head.set_temperature = static_cast<int>(std::lround(set_temp));
+    // std::lrint (round-half-to-even) matches FPC round() at unit_xisf.pas:260,
+    // so a half-degree temperature quantizes to the same integer as the original.
+    head.set_temperature = static_cast<int>(std::lrint(set_temp));
     
     // Extract exposure keywords
     extract_double_keyword(aline, "EXPTIME ", head.exposure);

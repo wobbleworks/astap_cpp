@@ -229,8 +229,9 @@ void pixel_to_celestial_stub([[maybe_unused]] const Header& head,
 /// MARK: - download_vsp
 
 bool download_vsp(IHttpClient& http, const Header& head, double limiting_mag) {
-    // Compute field-of-view in arcminutes
-    auto fov = static_cast<int>(std::round(
+    // Compute field-of-view in arcminutes. std::lrint (round-half-to-even)
+    // matches FPC round() at astap_main.pas:10500.
+    auto fov = static_cast<int>(std::lrint(
         std::sqrt(static_cast<double>(head.width) * head.width +
                   static_cast<double>(head.height) * head.height) *
         std::abs(head.cdelt2 * 60.0)));
@@ -671,11 +672,12 @@ void annotation_position(const Header& head,
             continue;
         }
         
-        // Parse the bounding box coordinates
-        auto x1 = static_cast<int>(std::lround(strtofloat2(parts[0])));
-        auto y1 = static_cast<int>(std::lround(strtofloat2(parts[1])));
-        auto x2 = static_cast<int>(std::lround(strtofloat2(parts[2])));
-        auto y2 = static_cast<int>(std::lround(strtofloat2(parts[3])));
+        // Parse the bounding box coordinates. std::lrint (round-half-to-even)
+        // matches FPC round() at astap_main.pas:12984-12987.
+        auto x1 = static_cast<int>(std::lrint(strtofloat2(parts[0])));
+        auto y1 = static_cast<int>(std::lrint(strtofloat2(parts[1])));
+        auto x2 = static_cast<int>(std::lrint(strtofloat2(parts[2])));
+        auto y2 = static_cast<int>(std::lrint(strtofloat2(parts[3])));
         
         // TODO: plumb the WCS formalism selector through; default 0.
         constexpr auto formalism = 0;

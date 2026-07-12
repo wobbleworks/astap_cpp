@@ -224,6 +224,10 @@ void patch_le32(std::array<std::uint8_t, 8>& header, std::size_t offset,
 }
 
 /// @brief Quantize a single-precision sample to uint16 with saturate + round.
+/// @details Uses std::lrint (round-half-to-even under the default FE_TONEAREST
+///          mode) rather than std::lround (round-half-away-from-zero) to match
+///          FPC's round(), so half-integer samples quantize identically to the
+///          original ASTAP tiff writer (unit_tiff.pas:210).
 [[nodiscard]] std::uint16_t to_u16(float sample) noexcept {
     auto dum = static_cast<double>(sample);
     if (dum > 65535.0) {
@@ -232,7 +236,7 @@ void patch_le32(std::array<std::uint8_t, 8>& header, std::size_t offset,
     if (dum < 0.0) {
         dum = 0.0;
     }
-    return static_cast<std::uint16_t>(std::lround(dum));
+    return static_cast<std::uint16_t>(std::lrint(dum));
 }
     
 }  // namespace
