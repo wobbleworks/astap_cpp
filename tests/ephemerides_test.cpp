@@ -17,6 +17,7 @@
 
 #include "core/ephemerides.h"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -265,6 +266,30 @@ TEST_CASE("earth_state: Barycentric velocity offset is tiny but non-zero") {
 	CHECK(dvmag < 1e-4);   // but tiny (< 1% of Earth's own speed)
 }
 
+TEST_CASE("epv2: returned velocity equals the numerical position derivative") {
+	// The analytic series velocity must match a central-difference of the series
+	// position — an internal-consistency check on every velocity formula (the
+	// T^0/T^1/T^2 product-rule terms, for both frames) independent of any
+	// external reference. h=0.1 d keeps truncation error well under the 1e-8
+	// tolerance while still catching a wrong term (which errs at ~1e-7 AU/day).
+	constexpr double h = 0.1;   // days
+	for (int k = 0; k < 5; ++k) {
+		const double jd = kJ2000 + (k - 2) * 2000.0;
+		for (const bool bary : { false, true }) {
+			Vec3 p_minus{}, p_plus{}, p0{}, v0{}, scratch{};
+			sla::epv2(jd - h, bary, p_minus, scratch);
+			sla::epv2(jd + h, bary, p_plus, scratch);
+			sla::epv2(jd, bary, p0, v0);
+			for (std::size_t i = 0; i < 3; ++i) {
+				const double num = (p_plus[i] - p_minus[i]) / (2.0 * h);
+				CAPTURE(jd); CAPTURE(bary); CAPTURE(i);
+				CAPTURE(num); CAPTURE(v0[i]);
+				CHECK(std::abs(num - v0[i]) < 1e-8);
+			}
+		}
+	}
+}
+
 ///----------------------------------------
 /// MARK: propagate — elliptic orbits
 ///----------------------------------------
@@ -395,8 +420,13 @@ TEST_CASE("propagate: hyperbolic orbit, r strictly increasing past perihelion") 
 	hyperbolic.mean_anomaly_at_epoch  = 0.0;
 
 	double r_prev = hyperbolic.perihelion_distance;
+	// SLALIB's sla_UE2PV solves with a fixed NITMAX=25; for this strongly
+	// hyperbolic orbit (e=1.4, a=−5 AU) that converges out to ~1500 d from
+	// perihelion — comfortably beyond any elements ASTAP actually propagates,
+	// which are always near their epoch. (The prior Meeus placeholder had no
+	// iteration cap and was sampled out to 2500 d.)
 	for (int k = 1; k <= 5; ++k) {
-		const double jd = kJ2000 + k * 500.0;
+		const double jd = kJ2000 + k * 300.0;
 		const auto s = propagate(hyperbolic, jd);
 		const double r = std::sqrt(s.position[0] * s.position[0]
 		                         + s.position[1] * s.position[1]
@@ -404,6 +434,101 @@ TEST_CASE("propagate: hyperbolic orbit, r strictly increasing past perihelion") 
 		CAPTURE(k); CAPTURE(r);
 		CHECK(r > r_prev);
 		r_prev = r;
+	}
+}
+
+///----------------------------------------
+/// MARK: sla — universal-variable routines
+///----------------------------------------
+
+TEST_CASE("sla::planel matches the propagate() wrapper for an ellipse") {
+	// propagate() is a thin wrapper over sla::planel; drive planel directly
+	// (JFORM=2, semimajor axis) and confirm the AU/s→AU/day conversion.
+	const auto el = ceres_like();
+	const double a = el.perihelion_distance / (1.0 - el.eccentricity);
+	const double date = kJ2000 + 500.0;
+
+	sla::PV pv{};
+	const int j = sla::planel(date, /*jform=*/2, el.epoch_jd,
+		el.inclination, el.ascending_node, el.argument_of_perihelion,
+		/*aorq=*/a, el.eccentricity, /*aorl=*/el.mean_anomaly_at_epoch,
+		/*dm=*/0.0, pv);
+	REQUIRE(j == 0);
+
+	const auto s = propagate(el, date);
+	CHECK(pv[0] == Approx(s.position[0]).epsilon(1e-12));
+	CHECK(pv[1] == Approx(s.position[1]).epsilon(1e-12));
+	CHECK(pv[2] == Approx(s.position[2]).epsilon(1e-12));
+	CHECK(pv[3] * 86400.0 == Approx(s.velocity[0]).epsilon(1e-12));
+}
+
+TEST_CASE("sla::pv2ue → ue2pv round-trips a propagated state") {
+	// Predict a state, convert it to universal elements, re-predict at a later
+	// date, and compare against a direct planel prediction — the two reference
+	// epochs must agree.
+	const auto el = ceres_like();
+	const double a = el.perihelion_distance / (1.0 - el.eccentricity);
+	const double d1 = kJ2000 + 100.0;
+	const double d2 = kJ2000 + 900.0;
+
+	sla::PV pv1{};
+	REQUIRE(sla::planel(d1, 2, el.epoch_jd, el.inclination, el.ascending_node,
+		el.argument_of_perihelion, a, el.eccentricity,
+		el.mean_anomaly_at_epoch, 0.0, pv1) == 0);
+
+	sla::UElements u{};
+	REQUIRE(sla::pv2ue(pv1, d1, /*pmass=*/0.0, u) == 0);
+
+	sla::PV pv_via_u{};
+	REQUIRE(sla::ue2pv(d2, u, pv_via_u) == 0);
+
+	sla::PV pv_direct{};
+	REQUIRE(sla::planel(d2, 2, el.epoch_jd, el.inclination, el.ascending_node,
+		el.argument_of_perihelion, a, el.eccentricity,
+		el.mean_anomaly_at_epoch, 0.0, pv_direct) == 0);
+
+	for (int k = 0; k < 6; ++k) {
+		CAPTURE(k);
+		CHECK(pv_via_u[static_cast<std::size_t>(k)]
+		      == Approx(pv_direct[static_cast<std::size_t>(k)]).epsilon(1e-9));
+	}
+}
+
+TEST_CASE("propagate: energy + angular momentum conserved for hyperbolic orbit") {
+	OrbitalElements hyp{};
+	hyp.epoch_jd                = kJ2000;   // at perihelion
+	hyp.perihelion_distance     = 2.0;
+	hyp.eccentricity            = 1.4;
+	hyp.inclination             = 0.2;
+	hyp.ascending_node          = 0.5;
+	hyp.argument_of_perihelion  = 1.0;
+	hyp.mean_anomaly_at_epoch   = 0.0;
+
+	constexpr double kGM = 0.01720209895 * 0.01720209895;
+	const double a = hyp.perihelion_distance / (1.0 - hyp.eccentricity);  // < 0
+	const double expected_energy = -kGM / (2.0 * a);                       // > 0
+
+	double h0 = -1.0;
+	// Sample both before and after perihelion.
+	for (double dt : {-400.0, 0.0, 250.0, 1200.0}) {
+		const auto s = propagate(hyp, kJ2000 + dt);
+		const double r = std::sqrt(s.position[0] * s.position[0]
+		                         + s.position[1] * s.position[1]
+		                         + s.position[2] * s.position[2]);
+		const double v2 = s.velocity[0] * s.velocity[0]
+		                + s.velocity[1] * s.velocity[1]
+		                + s.velocity[2] * s.velocity[2];
+		const double energy = 0.5 * v2 - kGM / r;
+		CAPTURE(dt);
+		CHECK(energy == Approx(expected_energy).epsilon(1e-9));
+
+		// Specific angular momentum |r × v| is an orbit invariant.
+		const double hx = s.position[1] * s.velocity[2] - s.position[2] * s.velocity[1];
+		const double hy = s.position[2] * s.velocity[0] - s.position[0] * s.velocity[2];
+		const double hz = s.position[0] * s.velocity[1] - s.position[1] * s.velocity[0];
+		const double h = std::sqrt(hx * hx + hy * hy + hz * hz);
+		if (h0 < 0.0) h0 = h;
+		else CHECK(h == Approx(h0).epsilon(1e-9));
 	}
 }
 
@@ -456,4 +581,61 @@ TEST_CASE("vsop::evaluate: τ⁰ and τ¹ time-powers accumulate correctly") {
 	const double jd_later = kJ2000 + 3652.5;   // 3652.5 d ≈ 0.01 millennia
 	const auto at_later = vsop::evaluate(body, jd_later);
 	CHECK(at_later.radius == Approx(1.05));
+}
+
+///----------------------------------------
+/// MARK: planet_state (SLALIB sla_PLANET)
+///----------------------------------------
+
+namespace {
+[[nodiscard]] double vmag(const Vec3& v) {
+	return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+[[nodiscard]] double vangle_deg(const Vec3& a, const Vec3& b) {
+	const double d = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (vmag(a) * vmag(b));
+	return std::acos(std::clamp(d, -1.0, 1.0)) * 180.0 / kPi;
+}
+struct PlanetAE { double a; double e; };
+// Table first-column (J2000) a and e, Mercury..Neptune (Simon 1994).
+constexpr PlanetAE kPlanetAE[8] = {
+	{ 0.3870983098, 0.2056317526 }, { 0.7233298200, 0.0067719164 },
+	{ 1.0000010178, 0.0167086342 }, { 1.5236793419, 0.0934006477 },
+	{ 5.2026032092, 0.0484979255 }, { 9.5549091915, 0.0555481426 },
+	{ 19.2184460618, 0.0463812221 }, { 30.1103868694, 0.0094557470 },
+};
+}  // namespace
+
+TEST_CASE("planet_state: heliocentric distance stays within the a(1 +/- e) band") {
+	for (const double dt : { -3650.0, 0.0, 3650.0 }) {
+		const double jd = kJ2000 + dt;
+		for (int np = 1; np <= 8; ++np) {
+			const PlanetAE ae = kPlanetAE[np - 1];
+			const double r = vmag(planet_state(np, jd).position);
+			CHECK(r >= 0.95 * ae.a * (1.0 - ae.e));
+			CHECK(r <= 1.05 * ae.a * (1.0 + ae.e));
+		}
+	}
+}
+
+TEST_CASE("planet_state: Earth (sla_PLANET) agrees with earth_state (sla_EPV2)") {
+	// Two independent SLALIB Earth models: Simon-1994 sla_PLANET (NP=3) vs the
+	// VSOP-simplified sla_EPV2 behind earth_state. They share no code or tables,
+	// so their agreement validates both paths (tables + algorithm + J2000
+	// equatorial frame) end-to-end. sla_PLANET is the less accurate of the two
+	// (~arcsec, degrading over decades), which sets the tolerance.
+	for (const double dt : { -3650.0, 0.0, 3650.0, 7300.0 }) {
+		const double jd = kJ2000 + dt;
+		const Vec3 planet = planet_state(3, jd).position;
+		const Vec3 epv2   = earth_state(jd, ReferenceFrame::Heliocentric).position;
+		CHECK(vangle_deg(planet, epv2) < 0.01);   // < 36 arcsec
+		CHECK(std::abs(vmag(planet) - vmag(epv2)) < 5e-5);
+	}
+}
+
+TEST_CASE("planet_state: illegal planet number returns a zero state") {
+	for (const int np : { 0, 9, -1 }) {
+		const State s = planet_state(np, kJ2000);
+		CHECK(vmag(s.position) == Approx(0.0));
+		CHECK(vmag(s.velocity) == Approx(0.0));
+	}
 }
