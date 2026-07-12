@@ -57,6 +57,7 @@
 #include "../src/reference/star_database.h"       // database_path, name_database
 #include "../src/solving/astrometric_solving.h"   // solve_image
 #include "../src/stacking/stack.h"       // analyse_image, Background
+#include "../src/stacking/stack_driver.h"         // stack_files (batch stacker)
 #include "../src/stacking/live_stacking.h"        // stack_live
 #include "../src/image/tiff.h"           // save_tiff_16
 #include "stb_image_decoder.h"           // install_stb_image_decoder()
@@ -128,6 +129,8 @@ struct Args {
     bool                       check = false;
     bool                       log = false;
     bool                       stack_mode = false;
+    bool                       stackfiles = false;   // batch-stack explicit frames
+    bool                       sigmaclip = false;     // sigma-clip combine (else average)
     std::optional<std::string> file;
     std::optional<double>      radius_deg;
     std::optional<double>      fov_deg;
@@ -271,6 +274,8 @@ Args parse_args(int argc, char* argv[]) {
         if (take_flag(arg, "log"))      { out.log = true; continue; }
         if (take_flag(arg, "update"))   { out.update_input = true; continue; }
         if (take_flag(arg, "annotate")) { out.annotate = true; continue; }
+        if (take_flag(arg, "stackfiles")) { out.stackfiles = true; continue; }
+        if (take_flag(arg, "sigmaclip"))  { out.sigmaclip = true; continue; }
 
         // Optional-value options. -sip disables on 'n' (else enables); -check
         // enables *only* on 'y' (bare -check is off in the CLI oracle);
@@ -698,6 +703,37 @@ int main(int argc, char* argv[]) {
     astap::cmdline = a.raw_cmdline;
 
     if (a.help) { print_help(std::cout); return 0; }
+
+    // 3a) -stackfiles: batch-stack the positional frame files (port superset,
+    //     not an oracle CLI option). Frames are the positional args; -o names
+    //     the output (default stack.fits); -d/-D set the star database for the
+    //     per-frame pre-solve; -sigmaclip selects the combiner (else average).
+    if (a.stackfiles) {
+        astap::commandline_execution = true;
+        if (a.database_path) {
+            std::filesystem::path p(*a.database_path);
+            if (!p.empty()
+                && p.native().back() != std::filesystem::path::preferred_separator) {
+                p /= "";
+            }
+            astap::reference::database_path = p;
+        }
+        if (a.database_name) { astap::reference::name_database = *a.database_name; }
+
+        std::vector<std::filesystem::path> frames(a.positional.begin(),
+                                                  a.positional.end());
+        const auto method = a.sigmaclip ? astap::stacking::StackMethod::SigmaClip
+                                        : astap::stacking::StackMethod::Average;
+        std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
+                                             : std::filesystem::path{"stack.fits"};
+        const auto res = astap::stacking::stack_files(frames, method, out);
+        std::cout << std::format(
+            "STACKED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_COMBINED={}\nOUTPUT={}\n",
+            res.ok ? 1 : 0, res.frames_input, res.frames_solved,
+            res.frames_combined, res.output.string());
+        if (!res.ok) { std::cerr << "astap: stack failed: " << res.message << '\n'; }
+        return res.ok ? 0 : 1;
+    }
 
     // 3) -stack live-stacking mode short-circuits everything else.
     if (a.stack_mode) { return run_stack(a); }

@@ -242,3 +242,19 @@ if(EXISTS "${ASTAP_CLI_BIN}")
 else()
 	message(STATUS "CLI binary not found — skipping differential_solve_test.")
 endif()
+
+# ---- Batch-stacker self-consistency test (spawns the astap binary) ----------
+
+if(EXISTS "${ASTAP_CLI_BIN}")
+	add_executable(stack_test stack_test.cpp)
+	target_include_directories(stack_test PRIVATE "${ASTAP_DOCTEST_HEADERS}")
+	target_compile_definitions(stack_test PRIVATE
+		ASTAP_BIN_PATH="${ASTAP_CLI_BIN}"
+		ASTAP_CORPUS_DIR="${ASTAP_CORPUS_DIR}"
+		ASTAP_DB_DIR="${ASTAP_DB_DIR}")
+	target_compile_features(stack_test PRIVATE cxx_std_23)
+	add_test(NAME stack_test COMMAND stack_test)
+	message(STATUS "stack_test: db=${ASTAP_DB_DIR} corpus=${ASTAP_CORPUS_DIR}")
+else()
+	message(STATUS "CLI binary not found — skipping stack_test.")
+endif()
