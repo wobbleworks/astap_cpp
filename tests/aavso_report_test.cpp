@@ -126,6 +126,27 @@ TEST_CASE("HJD date and tab delimiter") {
 	CHECK(report.find("Y\t2461002.50000\t12.000\t0.0400\t") != std::string::npos);
 }
 
+TEST_CASE("MERR is floored at the check-star scatter (1.4826*MAD)") {
+	auto m = AavsoMeasurement{};
+	m.variable_name = "W";
+	m.var_magnitude = 11.0;
+	m.jd            = 2461000.0;
+	m.snr           = 50;            // SNR method → 2/50 = 0.0400
+
+	auto opts = AavsoOptions{};
+	opts.ensemble = true;
+
+	// A check-star floor larger than the SNR error wins: max(0.0400, 0.0600).
+	opts.check_star_stdev = 0.06;
+	auto report = format_aavso_report(m, opts);
+	CHECK(report.find("W,2461000.00000,11.000,0.0600,") != std::string::npos);
+
+	// A floor below the SNR error is ignored: max(0.0400, 0.0200) = 0.0400.
+	opts.check_star_stdev = 0.02;
+	report = format_aavso_report(m, opts);
+	CHECK(report.find("W,2461000.00000,11.000,0.0400,") != std::string::npos);
+}
+
 TEST_CASE("BAA-style header includes location/telescope/camera") {
 	auto m = AavsoMeasurement{};
 	m.variable_name = "Z";

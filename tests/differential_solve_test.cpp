@@ -143,6 +143,17 @@ struct Wcs {
 	return keys;
 }
 
+/// @brief True when the .wcs beside @p base carries SIP distortion terms.
+[[nodiscard]] static bool wcs_has_sip(const fs::path& base) {
+	auto wcs = base; wcs.replace_extension(".wcs");
+	std::ifstream ifs(wcs);
+	std::string line;
+	while (std::getline(ifs, line)) {
+		if (line.rfind("A_ORDER", 0) == 0 || line.rfind("B_ORDER", 0) == 0) return true;
+	}
+	return false;
+}
+
 /// @brief Read NAXIS1/NAXIS2 from a FITS header. Current ASTAP no longer writes
 ///        image dimensions to the .ini, so the differential grid sampling reads
 ///        them straight from the source image instead. Returns false if absent.
@@ -353,4 +364,56 @@ TEST_CASE("solve: M31_a with wrong -ra hint — both decline to solve") {
 	// RA, so it would solve while the oracle (honouring the bad hint) failed.
 	solve_case("M31_a_badra", "M31_a.fits", /*must_solve=*/false,
 	           "-ra 12.0 -spd 131.27 -r 5", /*expect_unsolved=*/true);
+}
+
+///----------------------------------------
+/// MARK: -extract2 (forces SIP, always exports CSV)
+///----------------------------------------
+
+TEST_CASE("extract2: forces SIP and exports a CSV on a solved image") {
+	if (!assets_available()) return;
+	auto img = corpus_image("M31_a.fits");
+	if (!img) return;
+
+	const auto o_in = stage(*img, "extract2_oracle");
+	const auto p_in = stage(*img, "extract2_port");
+	const std::string db = " -d " + q(kDbDir.string());
+	const std::string args = " -r 179 -extract2 30";
+	(void)run(q(kOracleBin) + " -f " + q(o_in.string()) + db + args);
+	(void)run(q(kPortBin)   + " -f " + q(p_in.string()) + db + args);
+
+	auto o_csv = o_in; o_csv.replace_extension(".csv");
+	auto p_csv = p_in; p_csv.replace_extension(".csv");
+	// -extract2 forces high-accuracy SIP; both .wcs must carry SIP terms.
+	CHECK_MESSAGE(wcs_has_sip(o_in), "oracle .wcs lacks SIP under -extract2");
+	CHECK_MESSAGE(wcs_has_sip(p_in), "port .wcs lacks SIP under -extract2");
+	// Both must export the detected-star CSV.
+	CHECK(fs::exists(o_csv));
+	CHECK(fs::exists(p_csv));
+}
+
+TEST_CASE("extract2: exports a CSV even when the solve fails") {
+	if (!assets_available()) return;
+	auto img = corpus_image("M31_a.fits");
+	if (!img) return;
+
+	const auto o_in = stage(*img, "extract2fail_oracle");
+	const auto p_in = stage(*img, "extract2fail_port");
+	const std::string db = " -d " + q(kDbDir.string());
+	// Wrong start hint + tiny radius so both fail to solve, yet -extract2 must
+	// still write the star list (Pascal runs it outside the solve if/else).
+	const std::string args = " -ra 0 -spd 180 -r 1 -extract2 30";
+	(void)run(q(kOracleBin) + " -f " + q(o_in.string()) + db + args);
+	(void)run(q(kPortBin)   + " -f " + q(p_in.string()) + db + args);
+
+	auto o_ini = o_in; o_ini.replace_extension(".ini");
+	auto p_ini = p_in; p_ini.replace_extension(".ini");
+	auto o_csv = o_in; o_csv.replace_extension(".csv");
+	auto p_csv = p_in; p_csv.replace_extension(".csv");
+	// Both failed to solve...
+	CHECK_FALSE(parse_ini(o_ini).solved);
+	CHECK_FALSE(parse_ini(p_ini).solved);
+	// ...yet both still export the detected-star CSV.
+	CHECK(fs::exists(o_csv));
+	CHECK(fs::exists(p_csv));
 }

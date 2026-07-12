@@ -350,7 +350,9 @@ void apply_solver_overrides(const Args& a) {
     if (a.max_stars)     { astap::max_stars_setting = *a.max_stars; }
     if (a.tolerance)     { astap::quad_tolerance = *a.tolerance; }
     if (a.min_star_size) { astap::min_star_size_arcsec = *a.min_star_size; }
-    if (a.sip)           { astap::add_sip = true; }
+    // -extract2 forces SIP for high accuracy (Pascal astap_main.pas:13600),
+    // exactly as an explicit -sip would; must be set before the solve.
+    if (a.sip || a.extract2_specified) { astap::add_sip = true; }
     if (a.check)         { astap::check_pattern_filter = true; }
     if (a.speed)         { astap::force_oversize = (*a.speed == "slow"); }
     if (a.database_path) {
@@ -440,6 +442,30 @@ int run_stack(const Args& a) {
     return astap::errorlevel;
 }
 
+// -extract2: export the full detected-star catalog to a .csv (x,y,hfd,snr,flux,
+// plus ra/dec from the solved WCS). Pascal runs this after the solve either way
+// (astap_main.pas:13726, outside the solve if/else), so a failed solve still
+// exports the star list — just without a valid celestial mapping.
+void run_extract2(const Args& a, const std::filesystem::path& output_base) {
+    if (!a.extract2_specified) return;
+
+    double snr_min = a.extract2_snr.value_or(30.0);
+    if (snr_min == 0.0) snr_min = 30.0;
+    int    dummy_count = 0;
+    double dummy_hfd   = 0.0;
+    astap::Background bck{};
+    std::string csv_payload;
+    astap::stacking::analyse_image(astap::img_loaded, astap::head, snr_min,
+                                   /*report_type=*/2, dummy_count, bck, dummy_hfd,
+                                   &csv_payload);
+    if (!csv_payload.empty()) {
+        auto csv_path = output_base;
+        csv_path.replace_extension(".csv");
+        std::ofstream ofs(csv_path);
+        ofs << csv_payload;
+    }
+}
+
 int run_solve(const Args& a, const std::filesystem::path& output_base) {
     using namespace astap;
 
@@ -450,6 +476,8 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
                                               astap::check_pattern_filter);
     if (!solved) {
         (void)astap::core::write_ini(output_base, false);
+        // Pascal exports the -extract2 star list even when the solve fails.
+        run_extract2(a, output_base);
         if (astap::commandline_log) {
             auto logp = output_base;
             logp.replace_extension(".log");
@@ -558,24 +586,7 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
     }
 
     // -extract2: export full star catalog with celestial coords after solving.
-    if (a.extract2_specified) {
-        double snr_min = a.extract2_snr.value_or(30.0);
-        if (snr_min == 0.0) snr_min = 30.0;
-        int    dummy_count = 0;
-        double dummy_hfd   = 0.0;
-        astap::Background bck{};
-        std::string csv_payload;
-        astap::stacking::analyse_image(astap::img_loaded, astap::head, snr_min,
-                                       /*report_type=*/2, dummy_count, bck, dummy_hfd,
-                                       &csv_payload);
-        // -extract2 includes ra/dec columns (head carries the solved WCS).
-        if (!csv_payload.empty()) {
-            auto csv_path = output_base;
-            csv_path.replace_extension(".csv");
-            std::ofstream ofs(csv_path);
-            ofs << csv_payload;
-        }
-    }
+    run_extract2(a, output_base);
 
     if (astap::commandline_log) {
         auto logp = output_base;

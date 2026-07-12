@@ -124,9 +124,15 @@ constexpr auto kCrlf = "\r\n";
 
 	// Variable error: prefer the explicitly-supplied value; otherwise derive
 	// 2/SNR (a conservative practical default — matches Pascal's err_by_snr).
+	// When the check-star scatter is statistically valid (a time-series with a
+	// computed 1.4826·MAD floor), take the larger of the two, matching Pascal's
+	// max(err_by_snr, photometry_stdev).
 	auto var_err = m.var_error;
 	if (var_err <= 0.0 && m.snr > 0.0) {
 		var_err = 2.0 / m.snr;
+		if (opts.check_star_stdev > 0.0) {
+			var_err = std::max(var_err, opts.check_star_stdev);
+		}
 	}
 
 	auto row = std::string{};

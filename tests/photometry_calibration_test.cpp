@@ -416,8 +416,8 @@ TEST_CASE("calibrate_flux: saturated star (center ≥ datamax - 1000) is rejecte
 	}
 
 	// Saturate the core of the first star: paint a 3x3 block at the peak.
-	// datamax_org is 65535; cutoff is datamax_org - 1000 = 64535. Set to
-	// 65000 to ensure the saturation check trips.
+	// datamax_org is 65535; effective cutoff is datamax_org - 1001 = 64534.
+	// Set to 65000 to ensure the saturation check trips.
 	for (int dy = -1; dy <= 1; ++dy) {
 		for (int dx = -1; dx <= 1; ++dx) {
 			img[0][99 + dy][99 + dx] = 65000.0f;
@@ -430,6 +430,47 @@ TEST_CASE("calibrate_flux: saturated star (center ≥ datamax - 1000) is rejecte
 
 	CHECK(result.success);
 	CHECK(result.stars_measured == 7);  // saturated star rejected
+}
+
+TEST_CASE("calibrate_flux: pixel at exactly datamax-1001 is saturated (off-by-one)") {
+	// Pins the Pascal effective cutoff datamax_org-1001 (data_max=datamax_org-1,
+	// then -1000). A centre pixel of exactly 64534 (= 65535-1001) must be
+	// rejected: it is >= the cutoff. With the old datamax_org-1000 (=64535)
+	// cutoff this same pixel was kept, so this case fails before the fix.
+	constexpr int kW = 500;
+	constexpr int kH = 500;
+	constexpr double kSigma = 2.0;
+	constexpr double kPeak  = 8000.0;
+
+	auto head = make_header(kW, kH, 1.0, 0.3);
+	auto img  = make_image(kW, kH, 100.0f);
+	add_noise(img, 10.0f);
+
+	std::vector<TestStar> stars;
+	constexpr double positions[][2] = {
+		{100,  100}, {200,  100}, {300,  100}, {400,  100},
+		{100,  400}, {200,  400}, {300,  400}, {400,  400},
+	};
+	for (std::size_t i = 0; i < 8; ++i) {
+		paint_gaussian(img, positions[i][0] - 1.0, positions[i][1] - 1.0,
+		               kSigma, kPeak);
+		stars.push_back({.px = positions[i][0], .py = positions[i][1],
+		                 .magn_times_10 = 100.0});
+	}
+
+	// Core of the first star exactly on the effective cutoff (datamax_org-1001).
+	for (int dy = -1; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			img[0][99 + dy][99 + dx] = 64534.0f;   // 65535 - 1001
+		}
+	}
+
+	std::vector<std::string> memo;
+	auto result = calibrate_flux(img, head, memo, make_source(head, stars),
+	                              "V", 14, 0.0, false);
+
+	CHECK(result.success);
+	CHECK(result.stars_measured == 7);  // boundary pixel counts as saturated
 }
 
 ///----------------------------------------

@@ -614,10 +614,11 @@ FluxCalibrationResult calibrate_flux(const ImageArray& img,
         return result;
     }
 
-    // Saturation threshold. Matches the Pascal "not saturated" test:
-    // a star is rejected if the central 3x3 neighbourhood contains any pixel
-    // within 1000 ADU of datamax_org.
-    const auto saturation_cutoff = head.datamax_org - 1000.0;
+    // Saturation threshold. Matches the Pascal "not saturated" test, which
+    // compares against data_max - 1000 where data_max = datamax_org - 1
+    // (unit_annotation.pas:2047,1977) — an effective cutoff of datamax_org-1001.
+    // A star is rejected if its central 3x3 neighbourhood holds any pixel >= it.
+    const auto saturation_cutoff = head.datamax_org - 1001.0;
 
     // Accumulators for the robust mean at the end.
     auto flux_ratio_array = std::vector<double>{};

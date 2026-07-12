@@ -67,6 +67,7 @@ struct AavsoOptions {
 	bool        ensemble       = false;    ///< @brief @c true → CNAME = "ENSEMBLE", CMAG = "na".
 	double      delta_bv       = 0;        ///< @brief (B−V)var − (B−V)comp for the slope correction.
 	double      magnitude_slope = 0;       ///< @brief 2nd-order transformation slope.
+	double      check_star_stdev = 0;      ///< @brief Check-star scatter floor for MERR (1.4826·MAD of the check-star magnitude series); 0 = single measurement / stdev invalid → SNR method only. Pascal: MERR = max(2/SNR, photometry_stdev).
 
 	// #SOFTWARE field components:
 	std::string software_version;          ///< @brief e.g. "2026.04.24".
