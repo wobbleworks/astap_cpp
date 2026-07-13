@@ -164,8 +164,8 @@ namespace {
 // listview columns the port's Header can supply; Type/Background/σ are omitted —
 // no IMAGETYP field / no pixel pass here).
 enum MasterCol {
-	kMFile = 0, kMExp, kMTemp, kMBin, kMSize, kMFilter, kMGain, kMJd, kMCompat,
-	kMColCount
+	kMFile = 0, kMExp, kMTemp, kMBin, kMSize, kMFilter, kMGain, kMDate, kMJd,
+	kMCompat, kMColCount
 };
 
 // Read the first Lights-tab frame's header (no pixels) as the reference light for
@@ -203,9 +203,10 @@ enum MasterCol {
 [[nodiscard]] QTableWidget* make_master_table(QWidget* parent) {
 	auto* t = new QTableWidget(0, kMColCount, parent);
 	t->setHorizontalHeaderLabels({
-		QObject::tr("File"), QObject::tr("Exp"), QObject::tr("Temp"),
-		QObject::tr("Bin"), QObject::tr("Size"), QObject::tr("Filter"),
-		QObject::tr("Gain"), QObject::tr("JD"), QObject::tr("Compatibility")});
+		QObject::tr("File"), QObject::tr("Exposure"), QObject::tr("Temperature"),
+		QObject::tr("Binning"), QObject::tr("Size"), QObject::tr("Filter"),
+		QObject::tr("Gain"), QObject::tr("Date"), QObject::tr("JD"),
+		QObject::tr("Compatibility")});
 	t->horizontalHeader()->setSectionResizeMode(kMFile, QHeaderView::Stretch);
 	t->horizontalHeader()->setSectionResizeMode(kMCompat, QHeaderView::Stretch);
 	t->verticalHeader()->setVisible(false);
@@ -213,6 +214,9 @@ enum MasterCol {
 	t->setSelectionMode(QAbstractItemView::ExtendedSelection);
 	t->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	t->setWordWrap(false);
+	// Click-to-sort with indicators (Pascal AutoSortIndicator); default by Date.
+	t->setSortingEnabled(true);
+	t->sortByColumn(kMDate, Qt::AscendingOrder);
 	return t;
 }
 
@@ -234,6 +238,10 @@ void StackWindow::addMasterFiles(QTableWidget* table, const QString& title) {
 		existing.insert(table->item(r, kMFile)->data(Qt::UserRole).toString());
 	}
 
+	// Populate with sorting off so a mid-insert re-sort can't shuffle half-filled
+	// rows; restore + re-sort afterward.
+	const bool wasSorting = table->isSortingEnabled();
+	table->setSortingEnabled(false);
 	for (const auto& p : paths) {
 		if (existing.contains(p)) {
 			continue;
@@ -243,6 +251,8 @@ void StackWindow::addMasterFiles(QTableWidget* table, const QString& title) {
 		        std::filesystem::path(p.toStdString()), m)) {
 			continue;  // unreadable header — skip
 		}
+		_masterMeta.insert(p, m);   // cache for refreshCompatibility
+
 		const int row = table->rowCount();
 		table->insertRow(row);
 
@@ -264,9 +274,12 @@ void StackWindow::addMasterFiles(QTableWidget* table, const QString& title) {
 		cell(kMSize,   QString("%1×%2").arg(m.width).arg(m.height));
 		cell(kMFilter, QString::fromStdString(m.filter_name));
 		cell(kMGain,   QString::fromStdString(m.gain));
+		// Calendar date (the YYYY-MM-DD portion of DATE-OBS) — Pascal's default sort.
+		cell(kMDate,   QString::fromStdString(m.date_obs).left(10));
 		cell(kMJd,     QString::number(m.jd, 'f', 3));
 		cell(kMCompat, QString());
 	}
+	table->setSortingEnabled(wasSorting);
 	refreshCompatibility();
 }
 
@@ -296,17 +309,13 @@ void StackWindow::refreshCompatibility() {
 				continue;
 			}
 			auto text = QStringLiteral("—");
-			if (haveLight) {
-				const auto path = fileItem->data(Qt::UserRole).toString();
-				astap::stacking::MasterMetadata m;
-				if (astap::stacking::analyse_master(
-				        std::filesystem::path(path.toStdString()), m)) {
-					const auto issue = isFlat
-						? astap::stacking::master_flat_issue(light, m, opts)
-						: astap::stacking::master_dark_issue(light, m, opts);
-					text = issue.empty() ? tr("OK")
-					                     : QString::fromStdString(issue);
-				}
+			const auto path = fileItem->data(Qt::UserRole).toString();
+			const auto cached = _masterMeta.constFind(path);
+			if (haveLight && cached != _masterMeta.constEnd()) {
+				const auto issue = isFlat
+					? astap::stacking::master_flat_issue(light, *cached, opts)
+					: astap::stacking::master_dark_issue(light, *cached, opts);
+				text = issue.empty() ? tr("OK") : QString::fromStdString(issue);
 			}
 			auto* it = table->item(r, kMCompat);
 			if (!it) {
@@ -384,6 +393,7 @@ void StackWindow::buildDarksTab() {
 	auto* page = new QWidget(_tabs);
 	auto* layout = new QVBoxLayout(page);
 	_darkTable = make_master_table(page);
+	_darkTable->setColumnHidden(kMFilter, true);  // darks have no filter (Pascal listview2)
 	layout->addWidget(_darkTable, 1);
 
 	auto* row = new QHBoxLayout();
@@ -430,7 +440,7 @@ QWidget* StackWindow::buildClassifyBar() {
 	auto* group = new QGroupBox(tr("Classify by"), this);
 	auto* row = new QHBoxLayout(group);
 
-	_classDarkExp    = new QCheckBox(tr("Dark exposure"), group);
+	_classDarkExp    = new QCheckBox(tr("Dark exposure duration"), group);
 	_classDarkTemp   = new QCheckBox(tr("Dark temperature"), group);
 	_classDarkGain   = new QCheckBox(tr("Dark gain"), group);
 	_classFlatFilter = new QCheckBox(tr("Flat filter"), group);

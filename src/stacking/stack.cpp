@@ -902,11 +902,26 @@ void set_master_match_options(const MasterMatchOptions& options) {
 void set_dark_library(std::span<const std::filesystem::path> masters) {
     build_library(masters, dark_library);
     last_dark_loaded.clear();
+    if (dark_library.empty()) {
+        // No candidates ⇒ no dark. Also drop the resident master so a prior run's
+        // dark can't leak into a later library-less run in the same process (the
+        // per-frame load_master_dark early-returns when the library is empty and
+        // would otherwise leave stale img_dark/head_dark for apply_dark_and_flat
+        // to reuse). Pascal resets dark_count to 0 when nothing matches
+        // (unit_stack.pas:12126). The single-resident-master path (set_master_dark,
+        // used by the CLI batch driver) never calls this, so it is unaffected.
+        img_dark.clear();
+        head_dark = Header{};
+    }
 }
 
 void set_flat_library(std::span<const std::filesystem::path> masters) {
     build_library(masters, flat_library);
     last_flat_loaded.clear();
+    if (flat_library.empty()) {
+        img_flat.clear();
+        head_flat = Header{};
+    }
 }
 
 bool analyse_master(const std::filesystem::path& path, MasterMetadata& out) {

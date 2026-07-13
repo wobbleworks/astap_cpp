@@ -13,7 +13,10 @@
 #pragma once
 
 #include "../../src/types.h"
+#include "../../src/stacking/stack.h"   // MasterMetadata cache
 
+#include <QHash>
+#include <QString>
 #include <QTemporaryDir>
 #include <QWidget>
 
@@ -92,6 +95,10 @@ private:
 	// Darks / Flats candidate tables (the master library the engine matches from).
 	QTableWidget* _darkTable = nullptr;
 	QTableWidget* _flatTable = nullptr;
+
+	// Pre-analysed metadata cache (path → header fields) so the Compatibility
+	// column doesn't re-read every candidate header on each classify change.
+	QHash<QString, astap::stacking::MasterMetadata> _masterMeta;
 
 	// Shared "Classify by" controls (Pascal classify_dark_* / classify_flat_filter
 	// + delta_temp).
