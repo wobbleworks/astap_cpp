@@ -301,32 +301,43 @@ void StackWindow::refreshCompatibility() {
 	const bool haveLight = first_light_header(_fileTable, light);
 	const auto opts = match_options_from(_classDarkExp, _classDarkTemp,
 		_classDarkGain, _classFlatFilter, _deltaTemp);
+	updateCompatibility(_darkTable, /*isFlat=*/false, light, opts, haveLight);
+	updateCompatibility(_flatTable, /*isFlat=*/true,  light, opts, haveLight);
+}
 
-	auto fill = [&](QTableWidget* table, bool isFlat) {
-		for (int r = 0; r < table->rowCount(); ++r) {
-			auto* fileItem = table->item(r, kMFile);
-			if (!fileItem) {
-				continue;
-			}
-			auto text = QStringLiteral("—");
-			const auto path = fileItem->data(Qt::UserRole).toString();
-			const auto cached = _masterMeta.constFind(path);
-			if (haveLight && cached != _masterMeta.constEnd()) {
-				const auto issue = isFlat
-					? astap::stacking::master_flat_issue(light, *cached, opts)
-					: astap::stacking::master_dark_issue(light, *cached, opts);
-				text = issue.empty() ? tr("OK") : QString::fromStdString(issue);
-			}
-			auto* it = table->item(r, kMCompat);
-			if (!it) {
-				it = new QTableWidgetItem();
-				table->setItem(r, kMCompat, it);
-			}
-			it->setText(text);
+// Kept as a plain member (not a nested lambda) and free of iterator-deref /
+// ternary-of-calls: those tripped an MSVC front-end ICE (C1001) here.
+void StackWindow::updateCompatibility(QTableWidget* table, bool isFlat,
+		const astap::Header& light,
+		const astap::stacking::MasterMatchOptions& opts, bool haveLight) {
+	for (int r = 0; r < table->rowCount(); ++r) {
+		auto* fileItem = table->item(r, kMFile);
+		if (!fileItem) {
+			continue;
 		}
-	};
-	fill(_darkTable, /*isFlat=*/false);
-	fill(_flatTable, /*isFlat=*/true);
+		QString text = QStringLiteral("—");
+		const QString path = fileItem->data(Qt::UserRole).toString();
+		if (haveLight && _masterMeta.contains(path)) {
+			const astap::stacking::MasterMetadata m = _masterMeta.value(path);
+			std::string issue;
+			if (isFlat) {
+				issue = astap::stacking::master_flat_issue(light, m, opts);
+			} else {
+				issue = astap::stacking::master_dark_issue(light, m, opts);
+			}
+			if (issue.empty()) {
+				text = tr("OK");
+			} else {
+				text = QString::fromStdString(issue);
+			}
+		}
+		auto* it = table->item(r, kMCompat);
+		if (!it) {
+			it = new QTableWidgetItem();
+			table->setItem(r, kMCompat, it);
+		}
+		it->setText(text);
+	}
 }
 
 void StackWindow::applyLibrariesToEngine() {
@@ -440,6 +451,16 @@ QWidget* StackWindow::buildClassifyBar() {
 	auto* group = new QGroupBox(tr("Classify by"), this);
 	auto* row = new QHBoxLayout(group);
 
+	// Light classification (Pascal classify_filter_light1 / classify_object1).
+	_lightFilter = new QCheckBox(tr("Light filter"), group);
+	_lightFilter->setToolTip(
+		tr("Combine as LRGB/RGB using each light's channel tag (Lights tab)."));
+	_lightObject = new QCheckBox(tr("Light object"), group);
+	_lightObject->setToolTip(
+		tr("Stack images of different objects in one run "
+		   "(multi-object stacking is not yet implemented)."));
+	_lightObject->setEnabled(false);   // no per-object classification in the engine yet
+
 	_classDarkExp    = new QCheckBox(tr("Dark exposure duration"), group);
 	_classDarkTemp   = new QCheckBox(tr("Dark temperature"), group);
 	_classDarkGain   = new QCheckBox(tr("Dark gain"), group);
@@ -452,6 +473,8 @@ QWidget* StackWindow::buildClassifyBar() {
 	_deltaTemp->setSuffix(tr(" °C"));
 	_deltaTemp->setToolTip(tr("Temperature tolerance for dark matching"));
 
+	row->addWidget(_lightFilter);
+	row->addWidget(_lightObject);
 	row->addWidget(_classDarkExp);
 	row->addWidget(_classDarkTemp);
 	row->addWidget(_deltaTemp);
@@ -474,10 +497,12 @@ void StackWindow::buildSettingsTab() {
 	auto* page = new QWidget(_tabs);
 	auto* form = new QFormLayout(page);
 
+	// Combine algorithm. LRGB is not a method here — it is activated by the
+	// "Light filter" checkbox (Pascal: method = Average/Sigma-clip, and LRGB
+	// classification is switched on separately by classify_filter_light1).
 	_methodCombo = new QComboBox(page);
 	_methodCombo->addItem(tr("Average (weighted)"), kMethodAverage);
 	_methodCombo->addItem(tr("Sigma-clip average"), kMethodSigmaClip);
-	_methodCombo->addItem(tr("LRGB combine"), kMethodLRGB);
 	form->addRow(tr("Method:"), _methodCombo);
 
 	_alignmentCombo = new QComboBox(page);
@@ -687,8 +712,11 @@ void StackWindow::startStack() {
 	auto counter = 0;
 	const auto method = _methodCombo->currentData().toInt();
 	const auto osc = 0;  // TODO: OSC/Bayer toggle
+	// LRGB is activated by the "Light filter" classify checkbox (Pascal
+	// classify_filter_light1), not by a Method entry.
+	const bool lrgb = _lightFilter && _lightFilter->isChecked();
 
-	if (method == kMethodLRGB) {
+	if (lrgb) {
 		// Group rows by channel. Skip untagged ("Light") rows in LRGB mode —
 		// those files aren't meant for the combine.
 		auto byChannel = std::map<int, std::vector<Row>>{};

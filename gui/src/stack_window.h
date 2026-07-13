@@ -83,6 +83,10 @@ private:
 	void addMasterFiles(QTableWidget* table, const QString& title);
 	void removeSelectedRows(QTableWidget* table);
 	void refreshCompatibility();
+	void updateCompatibility(QTableWidget* table, bool isFlat,
+	                         const astap::Header& light,
+	                         const astap::stacking::MasterMatchOptions& opts,
+	                         bool haveLight);
 
 	QTabWidget* _tabs = nullptr;
 
@@ -100,8 +104,10 @@ private:
 	// column doesn't re-read every candidate header on each classify change.
 	QHash<QString, astap::stacking::MasterMetadata> _masterMeta;
 
-	// Shared "Classify by" controls (Pascal classify_dark_* / classify_flat_filter
-	// + delta_temp).
+	// Shared "Classify by" controls (Pascal classify_groupbox1). Light filter /
+	// object classify the lights; the dark_* / flat_filter gate master matching.
+	QCheckBox* _lightFilter = nullptr;   // activates LRGB (classify lights by filter)
+	QCheckBox* _lightObject = nullptr;   // stack different objects in one run
 	QCheckBox* _classDarkExp = nullptr;
 	QCheckBox* _classDarkTemp = nullptr;
 	QCheckBox* _classDarkGain = nullptr;
