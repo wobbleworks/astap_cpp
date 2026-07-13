@@ -223,28 +223,27 @@ void calculate_manual_vector(std::span<FileToDo> files_to_process, int c) {
         solution_vectorY[1] = 1.0;
         solution_vectorY[2] = referenceY - comet_y;
     } else {
-        sincos(head.dec0, SIN_dec0, COS_dec0);
-        astrometric_to_vector();
+        // Reference -> source vector solution (headA = head_ref, headB = head);
+        // astrometric_to_vector self-seeds sin/cos of each dec0
+        // (unit_stack_routines.pas:166).
+        astrometric_to_vector(head_ref, head);
 
         // Convert the comet/asteroid position to RA / DEC via this frame's WCS.
         pixel_to_celestial(head, comet_x, comet_y, 1, ra1, dec1);
-            
+
         // Asteroid position in reference image pixels.
         celestial_to_pixel(head_ref, ra1, dec1, x1, y1);
-        
-        // Convert centre-based solution to origin at (0,0).
-        if (solution_vectorX[0] < 0.0) {
-            solution_vectorX[2] += head.width - 1;
-        }
-        if (solution_vectorY[1] < 0.0) {
-            solution_vectorY[2] += head.height - 1;
-        }
-        
+
         shiftX = x1 - referenceX;
         shiftY = y1 - referenceY;
-        
-        solution_vectorX[2] -= shiftX;
-        solution_vectorY[2] -= shiftY;
+
+        // Flip the shift when the frame is mirrored on that axis
+        // (unit_stack_routines.pas:181-184).
+        if (solution_vectorX[0] < 0.0) { shiftX = -shiftX; }
+        if (solution_vectorY[1] < 0.0) { shiftY = -shiftY; }
+
+        solution_vectorX[2] += shiftX;
+        solution_vectorY[2] += shiftY;
     }
 }
 
@@ -268,41 +267,83 @@ void clear_3d(ImageArray& img, int channels, int height, int width) {
 /// MARK: astrometric_to_vector
 ///----------------------------------------
 
-void astrometric_to_vector() {
-    // SIP correction should be zero by definition.
+void astrometric_to_vector(const Header& headA, const Header& headB) {
+    // SIP correction is zero by definition for a first-order vector solution.
     a_order = 0;
-    
-    // Only reliable for first order.
-    calc_newx_newy(false, head.crpix1, head.crpix2);
-    auto centerX = x_new_float;
-    auto centerY = y_new_float;
-    
+
+    // sin / cos of each frame's dec0. Recomputed here rather than read from the
+    // SIN_dec0 / SIN_dec_ref globals so the mapping is correct regardless of the
+    // argument order (Pascal forces this refresh via the sin_dec0>999 /
+    // sin_dec2>999 sentinels, unit_stack_routines.pas:115).
+    auto sinA = 0.0, cosA = 0.0, sinB = 0.0, cosB = 0.0;
+    sincos(headA.dec0, sinA, cosA);
+    sincos(headB.dec0, sinB, cosB);
+
+    // Forward astrometric map of a headA pixel onto headB pixel space. This is
+    // the astrometric branch of calc_newx_newy parameterised on (A, B); with
+    // a_order == 0 the SIP terms drop out (unit_stack_routines.pas:41-104).
+    constexpr auto kPi = 3.14159265358979323846;
+    auto map_pt = [&](double fitsX, double fitsY, double& xo, double& yo) {
+        const auto u = fitsX - headA.crpix1;
+        const auto v = fitsY - headA.crpix2;
+        auto dRa  = (headA.cd1_1 * u + headA.cd1_2 * v) * kPi / 180.0;
+        auto dDec = (headA.cd2_1 * u + headA.cd2_2 * v) * kPi / 180.0;
+        const auto delta   = cosA - dDec * sinA;
+        const auto gamma   = std::sqrt(dRa * dRa + delta * delta);
+        const auto ra_new  = headA.ra0 + std::atan(dRa / delta);
+        const auto dec_new = std::atan((sinA + dDec * cosA) / gamma);
+
+        auto sin_dec_new = 0.0, cos_dec_new = 0.0;
+        sincos(dec_new, sin_dec_new, cos_dec_new);
+        const auto delta_ra = ra_new - headB.ra0;
+        auto sin_delta_ra = 0.0, cos_delta_ra = 0.0;
+        sincos(delta_ra, sin_delta_ra, cos_delta_ra);
+
+        const auto H = sin_dec_new * sinB + cos_dec_new * cosB * cos_delta_ra;
+        dRa  = (cos_dec_new * sin_delta_ra / H) * 180.0 / kPi;
+        dDec = ((sin_dec_new * cosB - cos_dec_new * sinB * cos_delta_ra) / H)
+               * 180.0 / kPi;
+        const auto det = headB.cd2_2 * headB.cd1_1 - headB.cd1_2 * headB.cd2_1;
+        const auto u0  = -(headB.cd1_2 * dDec - headB.cd2_2 * dRa) / det;
+        const auto v0  = +(headB.cd1_1 * dDec - headB.cd2_1 * dRa) / det;
+        xo = (headB.crpix1 + u0) - 1.0;   // 0..width-1
+        yo = (headB.crpix2 + v0) - 1.0;
+    };
+
+    auto centerX = 0.0, centerY = 0.0;
+    map_pt(headA.crpix1, headA.crpix2, centerX, centerY);
+
     // One pixel in X.
-    calc_newx_newy(false, head.crpix1 + 1, head.crpix2);
-    solution_vectorX[0] = +(x_new_float - centerX);
-    solution_vectorX[1] = -(y_new_float - centerY);
-    
+    auto px = 0.0, py = 0.0;
+    map_pt(headA.crpix1 + 1, headA.crpix2, px, py);
+    solution_vectorX[0] = +(px - centerX);
+    solution_vectorX[1] = -(py - centerY);
+
     // One pixel in Y.
-    calc_newx_newy(false, head.crpix1, head.crpix2 + 1);
-    solution_vectorY[0] = -(x_new_float - centerX);
-    solution_vectorY[1] = +(y_new_float - centerY);
-    
-    // Range 0..width-1.
-    solution_vectorX[2] = centerX - (head.crpix1 - 1);
-    solution_vectorY[2] = centerY - (head.crpix2 - 1);
-    
+    map_pt(headA.crpix1, headA.crpix2 + 1, px, py);
+    solution_vectorY[0] = -(px - centerX);
+    solution_vectorY[1] = +(py - centerY);
+
     // Check if the image is flipped (horizontal or vertical, but not both).
-    auto flipped           = head.cd1_1 * head.cd2_2
-                             - head.cd1_2 * head.cd2_1 > 0.0;
-    auto flipped_reference = head_ref.cd1_1 * head_ref.cd2_2
-                             - head_ref.cd1_2 * head_ref.cd2_1 > 0.0;
-                             
+    const auto flipped           = headA.cd1_1 * headA.cd2_2
+                                   - headA.cd1_2 * headA.cd2_1 > 0.0;
+    const auto flipped_reference = headB.cd1_1 * headB.cd2_2
+                                   - headB.cd1_2 * headB.cd2_1 > 0.0;
     if (flipped != flipped_reference) {
         solution_vectorX[1] = -solution_vectorX[1];
         solution_vectorY[0] = -solution_vectorY[0];
     }
-    
-    // TODO: if solve_show_log1.checked -> log astrometric vector solution.
+
+    // Origin at (0,0): centerX = vecX[0]*(crpixA-1) + vecX[1]*(crpiyA-1) +
+    // vecX[2], solved for vecX[2] (unit_stack_routines.pas:143-144). This keeps
+    // the rotation/scale coefficients, unlike the earlier simplified port.
+    solution_vectorX[2] = centerX
+        - solution_vectorX[0] * (headA.crpix1 - 1.0)
+        - solution_vectorX[1] * (headA.crpix2 - 1.0);
+    solution_vectorY[2] = centerY
+        - solution_vectorY[0] * (headA.crpix1 - 1.0)
+        - solution_vectorY[1] * (headA.crpix2 - 1.0);
+
     memo2_message("Astrometric vector solution " + solution_str);
 }
 
@@ -628,11 +669,11 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                     binning = report_binning(head.height);
                     bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
-                    find_quads(starlist1, quad_star_distances1);
+                    find_quads(starlist1, quad_star_distances2);  // reference -> quad2 (gather: solution maps reference -> source)
                     memo2_message("Reference: "
                         + std::to_string(starlist1.empty() ? 0 : starlist1[0].size())
                         + " stars, "
-                        + std::to_string(quad_star_distances1.empty() ? 0 : quad_star_distances1[0].size())
+                        + std::to_string(quad_star_distances2.empty() ? 0 : quad_star_distances2[0].size())
                         + " quads.");
                 }
             }
@@ -659,11 +700,11 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                     } else {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist2, warning);
-                        find_quads(starlist2, quad_star_distances2);
+                        find_quads(starlist2, quad_star_distances1);  // source -> quad1
                         memo2_message("Target: "
                             + std::to_string(starlist2.empty() ? 0 : starlist2[0].size())
                             + " stars, "
-                            + std::to_string(quad_star_distances2.empty() ? 0 : quad_star_distances2[0].size())
+                            + std::to_string(quad_star_distances1.empty() ? 0 : quad_star_distances1[0].size())
                             + " quads.");
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
@@ -693,7 +734,7 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                 jd_sum        += jd_mid;
                 
                 if (use_astrometry_internal) {
-                    astrometric_to_vector();
+                    astrometric_to_vector(head_ref, head);
                 }
                 
                 aa  = solution_vectorX[0];
@@ -703,76 +744,103 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                 ee  = solution_vectorY[1];
                 ff  = solution_vectorY[2];
                 
-                for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                    for (fitsX = 0; fitsX < head.width; ++fitsX) {
-                        x_new = static_cast<int>(std::round(aa * fitsX + bb2 * fitsY + cc2));
-                        y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                        
-                        if (x_new < 0 || x_new > width_max - 1
-                            || y_new < 0 || y_new > height_max - 1) {
+                // Inverse (gather) bilinear resampling: iterate the reference
+                // grid, find each pixel's source position, and bilinearly sample
+                // the source channel(s) (unit_stack_routines.pas:617-711).
+                for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                    for (fitsX = 0; fitsX < width_max; ++fitsX) {
+                        const auto x_new_f = aa * fitsX + bb2 * fitsY + cc2;
+                        const auto y_new_f = dd * fitsX + ee  * fitsY + ff;
+                        x_new = static_cast<int>(x_new_f);
+                        y_new = static_cast<int>(y_new_f);
+                        if (x_new <= 0 || x_new >= head.width - 1
+                            || y_new <= 0 || y_new >= head.height - 1) {
                             continue;
                         }
-                        
+                        const auto x_frac = x_new_f - x_new;
+                        const auto y_frac = y_new_f - y_new;
+                        const auto w00 = (1.0 - x_frac) * (1.0 - y_frac);
+                        const auto w10 =        x_frac  * (1.0 - y_frac);
+                        const auto w01 = (1.0 - x_frac) *        y_frac;
+                        const auto w11 =        x_frac  *        y_frac;
+                        // Bilinear sample of source channel 0 (present in every
+                        // LRGB input; the mono R/G/B/L frames have only channel 0).
+                        const auto s0 =
+                            img_loaded[0][y_new    ][x_new    ] * w00
+                          + img_loaded[0][y_new    ][x_new + 1] * w10
+                          + img_loaded[0][y_new + 1][x_new    ] * w01
+                          + img_loaded[0][y_new + 1][x_new + 1] * w11;
+
                         if (c == 1) {
                             // Red channel. (The saturation black-spot marking is
                             // commented out upstream — unit_stack_routines.pas:639
                             // — so every in-bounds pixel is accumulated.)
-                            value = img_loaded[0][fitsY][fitsX] - background_r;
+                            value = s0 - background_r;
                             if (rr_factor > 1e-5) {
-                                img_average[0][y_new][x_new] += static_cast<float>(rr_factor * value);
-                                img_temp[0][y_new][x_new] += 1.0f;
+                                img_average[0][fitsY][fitsX] += static_cast<float>(rr_factor * value);
+                                img_temp[0][fitsY][fitsX] += 1.0f;
                             }
                             if (rg_factor > 1e-5) {
-                                img_average[1][y_new][x_new] += static_cast<float>(rg_factor * value);
-                                img_temp[1][y_new][x_new] += 1.0f;
+                                img_average[1][fitsY][fitsX] += static_cast<float>(rg_factor * value);
+                                img_temp[1][fitsY][fitsX] += 1.0f;
                             }
                             if (rb_factor > 1e-5) {
-                                img_average[2][y_new][x_new] += static_cast<float>(rb_factor * value);
-                                img_temp[2][y_new][x_new] += 1.0f;
+                                img_average[2][fitsY][fitsX] += static_cast<float>(rb_factor * value);
+                                img_temp[2][fitsY][fitsX] += 1.0f;
                             }
                         } else if (c == 2) {
                             // Green channel.
-                            value = img_loaded[0][fitsY][fitsX] - background_g;
+                            value = s0 - background_g;
                             if (gr_factor > 1e-5) {
-                                img_average[0][y_new][x_new] += static_cast<float>(gr_factor * value);
-                                img_temp[0][y_new][x_new] += 1.0f;
+                                img_average[0][fitsY][fitsX] += static_cast<float>(gr_factor * value);
+                                img_temp[0][fitsY][fitsX] += 1.0f;
                             }
                             if (gg_factor > 1e-5) {
-                                img_average[1][y_new][x_new] += static_cast<float>(gg_factor * value);
-                                img_temp[1][y_new][x_new] += 1.0f;
+                                img_average[1][fitsY][fitsX] += static_cast<float>(gg_factor * value);
+                                img_temp[1][fitsY][fitsX] += 1.0f;
                             }
                             if (gb_factor > 1e-5) {
-                                img_average[2][y_new][x_new] += static_cast<float>(gb_factor * value);
-                                img_temp[2][y_new][x_new] += 1.0f;
+                                img_average[2][fitsY][fitsX] += static_cast<float>(gb_factor * value);
+                                img_temp[2][fitsY][fitsX] += 1.0f;
                             }
                         } else if (c == 3) {
                             // Blue channel.
-                            value = img_loaded[0][fitsY][fitsX] - background_b;
+                            value = s0 - background_b;
                             if (br_factor > 1e-5) {
-                                img_average[0][y_new][x_new] += static_cast<float>(br_factor * value);
-                                img_temp[0][y_new][x_new] += 1.0f;
+                                img_average[0][fitsY][fitsX] += static_cast<float>(br_factor * value);
+                                img_temp[0][fitsY][fitsX] += 1.0f;
                             }
                             if (bg_factor > 1e-5) {
-                                img_average[1][y_new][x_new] += static_cast<float>(bg_factor * value);
-                                img_temp[1][y_new][x_new] += 1.0f;
+                                img_average[1][fitsY][fitsX] += static_cast<float>(bg_factor * value);
+                                img_temp[1][fitsY][fitsX] += 1.0f;
                             }
                             if (bb_factor > 1e-5) {
-                                img_average[2][y_new][x_new] += static_cast<float>(bb_factor * value);
-                                img_temp[2][y_new][x_new] += 1.0f;
+                                img_average[2][fitsY][fitsX] += static_cast<float>(bb_factor * value);
+                                img_temp[2][fitsY][fitsX] += 1.0f;
                             }
                         } else if (c == 4) {
-                            // RGB image, naxis3=3.
-                            img_average[0][y_new][x_new] += static_cast<float>(img_loaded[0][fitsY][fitsX] - background_r);
-                            img_temp[0][y_new][x_new] += 1.0f;
-                            img_average[1][y_new][x_new] += static_cast<float>(img_loaded[1][fitsY][fitsX] - background_g);
-                            img_temp[1][y_new][x_new] += 1.0f;
-                            img_average[2][y_new][x_new] += static_cast<float>(img_loaded[2][fitsY][fitsX] - background_b);
-                            img_temp[2][y_new][x_new] += 1.0f;
+                            // RGB image, naxis3=3: bilinear-sample each channel.
+                            const auto s1 =
+                                img_loaded[1][y_new    ][x_new    ] * w00
+                              + img_loaded[1][y_new    ][x_new + 1] * w10
+                              + img_loaded[1][y_new + 1][x_new    ] * w01
+                              + img_loaded[1][y_new + 1][x_new + 1] * w11;
+                            const auto s2 =
+                                img_loaded[2][y_new    ][x_new    ] * w00
+                              + img_loaded[2][y_new    ][x_new + 1] * w10
+                              + img_loaded[2][y_new + 1][x_new    ] * w01
+                              + img_loaded[2][y_new + 1][x_new + 1] * w11;
+                            img_average[0][fitsY][fitsX] += static_cast<float>(s0 - background_r);
+                            img_temp[0][fitsY][fitsX] += 1.0f;
+                            img_average[1][fitsY][fitsX] += static_cast<float>(s1 - background_g);
+                            img_temp[1][fitsY][fitsX] += 1.0f;
+                            img_average[2][fitsY][fitsX] += static_cast<float>(s2 - background_b);
+                            img_temp[2][fitsY][fitsX] += 1.0f;
                         } else if (c == 5) {
                             // Luminance: r := l*(0.33+r)/(r+g+b).
-                            colr = img_average[0][y_new][x_new] - 475 + red_add;
-                            colg = img_average[1][y_new][x_new] - 475 + green_add;
-                            colb = img_average[2][y_new][x_new] - 475 + blue_add;
+                            colr = img_average[0][fitsY][fitsX] - 475 + red_add;
+                            colg = img_average[1][fitsY][fitsX] - 475 + green_add;
+                            colb = img_average[2][fitsY][fitsX] - 475 + blue_add;
                             rgbsum = colr + colg + colb;
                             if (rgbsum < 0.1) {
                                 rgbsum = 0.1;
@@ -784,9 +852,9 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                                 green_f = std::clamp(colg / rgbsum, 0.0, 1.0);
                                 blue_f  = std::clamp(colb / rgbsum, 0.0, 1.0);
                             }
-                            img_average[0][y_new][x_new] = static_cast<float>(1000.0 + (img_loaded[0][fitsY][fitsX] - background_l) * red_f);
-                            img_average[1][y_new][x_new] = static_cast<float>(1000.0 + (img_loaded[0][fitsY][fitsX] - background_l) * green_f);
-                            img_average[2][y_new][x_new] = static_cast<float>(1000.0 + (img_loaded[0][fitsY][fitsX] - background_l) * blue_f);
+                            img_average[0][fitsY][fitsX] = static_cast<float>(1000.0 + (s0 - background_l) * red_f);
+                            img_average[1][fitsY][fitsX] = static_cast<float>(1000.0 + (s0 - background_l) * green_f);
+                            img_average[2][fitsY][fitsX] = static_cast<float>(1000.0 + (s0 - background_l) * blue_f);
                         }
                     }
                 }
@@ -951,11 +1019,11 @@ void stack_average(int process_as_osc,
                 } else if (!use_astrometry_internal) {
                     bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
-                    find_quads(starlist1, quad_star_distances1);
+                    find_quads(starlist1, quad_star_distances2);  // reference -> quad2 (gather: solution maps reference -> source)
                     memo2_message("Reference: "
                         + std::to_string(starlist1.empty() ? 0 : starlist1[0].size())
                         + " stars, "
-                        + std::to_string(quad_star_distances1.empty() ? 0 : quad_star_distances1[0].size())
+                        + std::to_string(quad_star_distances2.empty() ? 0 : quad_star_distances2[0].size())
                         + " quads.");
                     pedestal_s = bck.backgr;
                     if (pedestal_s < 500.0) {
@@ -990,11 +1058,11 @@ void stack_average(int process_as_osc,
                             head.datamax_org = 0xFFFF;
                         }
                         head.pedestal = background_correction;
-                        find_quads(starlist2, quad_star_distances2);
+                        find_quads(starlist2, quad_star_distances1);  // source -> quad1
                         memo2_message("Target: "
                             + std::to_string(starlist2.empty() ? 0 : starlist2[0].size())
                             + " stars, "
-                            + std::to_string(quad_star_distances2.empty() ? 0 : quad_star_distances2[0].size())
+                            + std::to_string(quad_star_distances1.empty() ? 0 : quad_star_distances1[0].size())
                             + " quads.");
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
@@ -1027,7 +1095,7 @@ void stack_average(int process_as_osc,
                 airmass_sum   += airmass;
                 
                 if (use_astrometry_internal) {
-                    astrometric_to_vector();
+                    astrometric_to_vector(head_ref, head);
                 }
                 
                 aa = solution_vectorX[0];
@@ -1037,18 +1105,34 @@ void stack_average(int process_as_osc,
                 ee = solution_vectorY[1];
                 ff = solution_vectorY[2];
                 
-                for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                    for (fitsX = 0; fitsX < head.width; ++fitsX) {
-                        x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
-                        y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                        if (x_new < 0 || x_new > width_max - 1
-                            || y_new < 0 || y_new > height_max - 1) {
+                // Inverse (gather) mapping with bilinear resampling: iterate the
+                // reference grid, find each pixel's source position, and sample the
+                // four surrounding source pixels (unit_threaded_stacking_mean.pas:67-99).
+                for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                    for (fitsX = 0; fitsX < width_max; ++fitsX) {
+                        const auto x_new_f = aa * fitsX + bb * fitsY + cc;
+                        const auto y_new_f = dd * fitsX + ee * fitsY + ff;
+                        x_new = static_cast<int>(x_new_f);   // trunc toward zero
+                        y_new = static_cast<int>(y_new_f);
+                        if (x_new <= 0 || x_new >= head.width - 1
+                            || y_new <= 0 || y_new >= head.height - 1) {
                             continue;
                         }
+                        const auto x_frac = x_new_f - x_new;
+                        const auto y_frac = y_new_f - y_new;
+                        const auto w00 = (1.0 - x_frac) * (1.0 - y_frac);
+                        const auto w10 =        x_frac  * (1.0 - y_frac);
+                        const auto w01 = (1.0 - x_frac) *        y_frac;
+                        const auto w11 =        x_frac  *        y_frac;
                         for (col = 0; col < head.naxis3; ++col) {
-                            img_average[col][y_new][x_new] += static_cast<float>(img_loaded[col][fitsY][fitsX] * weightF);
+                            const auto val =
+                                img_loaded[col][y_new    ][x_new    ] * w00
+                              + img_loaded[col][y_new    ][x_new + 1] * w10
+                              + img_loaded[col][y_new + 1][x_new    ] * w01
+                              + img_loaded[col][y_new + 1][x_new + 1] * w11;
+                            img_average[col][fitsY][fitsX] += static_cast<float>(val * weightF);
                         }
-                        img_temp[0][y_new][x_new] += static_cast<float>(weightF);
+                        img_temp[0][fitsY][fitsX] += static_cast<float>(weightF);
                     }
                 }
             }
@@ -1306,7 +1390,10 @@ void stack_mosaic(int process_as_osc,
             
             vector_based = false;
             if (a_order == 0) {
-                astrometric_to_vector();
+                // Mosaic scatters, so it needs a source -> reference solution:
+                // headA = head (source), headB = head_ref (reference)
+                // (unit_stack_routines.pas:996).
+                astrometric_to_vector(head, head_ref);
                 vector_based = true;
             }
             ap_order = 0;  // don't correct for RA to XY for mosaic
@@ -1601,7 +1688,7 @@ void stack_sigmaclip(int process_as_osc,
                     } else {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist1, warning);
-                        find_quads(starlist1, quad_star_distances1);
+                        find_quads(starlist1, quad_star_distances2);  // reference -> quad2 (gather: solution maps reference -> source)
                     }
                 }
                 height_max = head.height;
@@ -1623,7 +1710,7 @@ void stack_sigmaclip(int process_as_osc,
                     } else {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist2, warning);
-                        find_quads(starlist2, quad_star_distances2);
+                        find_quads(starlist2, quad_star_distances1);  // source -> quad1
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                           + std::to_string(nr_references2) + " quads. "
@@ -1668,7 +1755,7 @@ void stack_sigmaclip(int process_as_osc,
                 airmass_sum   += airmass;
                 
                 if (use_astrometry_internal) {
-                    astrometric_to_vector();
+                    astrometric_to_vector(head_ref, head);
                 }
                 
                 aa = solution_vectorX[0];
@@ -1678,18 +1765,33 @@ void stack_sigmaclip(int process_as_osc,
                 ee = solution_vectorY[1];
                 ff = solution_vectorY[2];
                 
-                for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                    for (fitsX = 0; fitsX < head.width; ++fitsX) {
-                        x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
-                        y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                        if (x_new < 0 || x_new > width_max - 1
-                            || y_new < 0 || y_new > height_max - 1) {
+                // Pass 1: weighted running mean via inverse (gather) bilinear
+                // resampling (unit_threaded_stacking_mean_and_variance.pas).
+                for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                    for (fitsX = 0; fitsX < width_max; ++fitsX) {
+                        const auto x_new_f = aa * fitsX + bb * fitsY + cc;
+                        const auto y_new_f = dd * fitsX + ee * fitsY + ff;
+                        x_new = static_cast<int>(x_new_f);
+                        y_new = static_cast<int>(y_new_f);
+                        if (x_new <= 0 || x_new >= head.width - 1
+                            || y_new <= 0 || y_new >= head.height - 1) {
                             continue;
                         }
+                        const auto x_frac = x_new_f - x_new;
+                        const auto y_frac = y_new_f - y_new;
+                        const auto w00 = (1.0 - x_frac) * (1.0 - y_frac);
+                        const auto w10 =        x_frac  * (1.0 - y_frac);
+                        const auto w01 = (1.0 - x_frac) *        y_frac;
+                        const auto w11 =        x_frac  *        y_frac;
                         for (col = 0; col < head.naxis3; ++col) {
-                            img_average[col][y_new][x_new] += static_cast<float>(
-                                (img_loaded[col][fitsY][fitsX] - background_correction) * weightF);
-                            img_temp[col][y_new][x_new] += static_cast<float>(weightF);
+                            const auto val =
+                                img_loaded[col][y_new    ][x_new    ] * w00
+                              + img_loaded[col][y_new    ][x_new + 1] * w10
+                              + img_loaded[col][y_new + 1][x_new    ] * w01
+                              + img_loaded[col][y_new + 1][x_new + 1] * w11;
+                            img_average[col][fitsY][fitsX] += static_cast<float>(
+                                (val - background_correction) * weightF);
+                            img_temp[col][fitsY][fitsX] += static_cast<float>(weightF);
                         }
                     }
                 }
@@ -1780,7 +1882,7 @@ void stack_sigmaclip(int process_as_osc,
             head.datamax_org = std::min(65535.0, head.datamax_org - background_correction);
             
             if (use_astrometry_internal) {
-                astrometric_to_vector();
+                astrometric_to_vector(head_ref, head);
             }
             
             aa = solution_vectorX[0];
@@ -1790,18 +1892,33 @@ void stack_sigmaclip(int process_as_osc,
             ee = solution_vectorY[1];
             ff = solution_vectorY[2];
             
-            for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                for (fitsX = 0; fitsX < head.width; ++fitsX) {
-                    x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
-                    y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                    if (x_new < 0 || x_new > width_max - 1
-                        || y_new < 0 || y_new > height_max - 1) {
+            // Pass 2: accumulate squared deviation from the mean via the same
+            // inverse (gather) bilinear resampling as pass 1.
+            for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                for (fitsX = 0; fitsX < width_max; ++fitsX) {
+                    const auto x_new_f = aa * fitsX + bb * fitsY + cc;
+                    const auto y_new_f = dd * fitsX + ee * fitsY + ff;
+                    x_new = static_cast<int>(x_new_f);
+                    y_new = static_cast<int>(y_new_f);
+                    if (x_new <= 0 || x_new >= head.width - 1
+                        || y_new <= 0 || y_new >= head.height - 1) {
                         continue;
                     }
+                    const auto x_frac = x_new_f - x_new;
+                    const auto y_frac = y_new_f - y_new;
+                    const auto w00 = (1.0 - x_frac) * (1.0 - y_frac);
+                    const auto w10 =        x_frac  * (1.0 - y_frac);
+                    const auto w01 = (1.0 - x_frac) *        y_frac;
+                    const auto w11 =        x_frac  *        y_frac;
                     for (col = 0; col < head.naxis3; ++col) {
-                        img_variance[col][y_new][x_new] += static_cast<float>(sqr(
-                            (img_loaded[col][fitsY][fitsX] - background_correction) * weightF
-                            - img_average[col][y_new][x_new]));
+                        const auto val =
+                            img_loaded[col][y_new    ][x_new    ] * w00
+                          + img_loaded[col][y_new    ][x_new + 1] * w10
+                          + img_loaded[col][y_new + 1][x_new    ] * w01
+                          + img_loaded[col][y_new + 1][x_new + 1] * w11;
+                        img_variance[col][fitsY][fitsX] += static_cast<float>(sqr(
+                            (val - background_correction) * weightF
+                            - img_average[col][fitsY][fitsX]));
                     }
                 }
             }
@@ -1890,7 +2007,7 @@ void stack_sigmaclip(int process_as_osc,
             head.datamax_org = std::min(65535.0, head.datamax_org - background_correction);
             
             if (use_astrometry_internal) {
-                astrometric_to_vector();
+                astrometric_to_vector(head_ref, head);
             }
             
             aa = solution_vectorX[0];
@@ -1900,20 +2017,36 @@ void stack_sigmaclip(int process_as_osc,
             ee = solution_vectorY[1];
             ff = solution_vectorY[2];
             
-            for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                for (fitsX = 0; fitsX < head.width; ++fitsX) {
-                    x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
-                    y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                    if (x_new < 0 || x_new > width_max - 1
-                        || y_new < 0 || y_new > height_max - 1) {
+            // Pass 3: reject outliers and combine, via the same inverse (gather)
+            // bilinear resampling. The keep-test compares each resampled sample to
+            // the mean/variance already stored at the destination pixel.
+            for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                for (fitsX = 0; fitsX < width_max; ++fitsX) {
+                    const auto x_new_f = aa * fitsX + bb * fitsY + cc;
+                    const auto y_new_f = dd * fitsX + ee * fitsY + ff;
+                    x_new = static_cast<int>(x_new_f);
+                    y_new = static_cast<int>(y_new_f);
+                    if (x_new <= 0 || x_new >= head.width - 1
+                        || y_new <= 0 || y_new >= head.height - 1) {
                         continue;
                     }
+                    const auto x_frac = x_new_f - x_new;
+                    const auto y_frac = y_new_f - y_new;
+                    const auto w00 = (1.0 - x_frac) * (1.0 - y_frac);
+                    const auto w10 =        x_frac  * (1.0 - y_frac);
+                    const auto w01 = (1.0 - x_frac) *        y_frac;
+                    const auto w11 =        x_frac  *        y_frac;
                     for (col = 0; col < head.naxis3; ++col) {
-                        value = (img_loaded[col][fitsY][fitsX] - background_correction) * weightF;
-                        if (sqr(value - img_average[col][y_new][x_new])
-                            < variance_factor * img_variance[col][y_new][x_new]) {
-                            img_final[col][y_new][x_new] += static_cast<float>(value);
-                            img_temp[col][y_new][x_new]  += static_cast<float>(weightF);
+                        const auto sample =
+                            img_loaded[col][y_new    ][x_new    ] * w00
+                          + img_loaded[col][y_new    ][x_new + 1] * w10
+                          + img_loaded[col][y_new + 1][x_new    ] * w01
+                          + img_loaded[col][y_new + 1][x_new + 1] * w11;
+                        value = (sample - background_correction) * weightF;
+                        if (sqr(value - img_average[col][fitsY][fitsX])
+                            < variance_factor * img_variance[col][fitsY][fitsX]) {
+                            img_final[col][fitsY][fitsX] += static_cast<float>(value);
+                            img_temp[col][fitsY][fitsX]  += static_cast<float>(weightF);
                         }
                     }
                 }
@@ -2163,22 +2296,26 @@ void stack_comet(int process_as_osc,
                 ee = solution_vectorY[1];
                 ff = solution_vectorY[2];
                 
-                for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                    for (fitsX = 0; fitsX < head.width; ++fitsX) {
+                // Inverse (gather) nearest-neighbour mapping: iterate the
+                // reference grid, read the source pixel it came from, and record
+                // the max value / its time per destination pixel
+                // (unit_stack_routines.pas:1812-1831).
+                for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                    for (fitsX = 0; fitsX < width_max; ++fitsX) {
                         x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
                         y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                        if (x_new < 0 || x_new > width_max - 1
-                            || y_new < 0 || y_new > height_max - 1) {
+                        if (x_new < 0 || x_new > head.width - 1
+                            || y_new < 0 || y_new > head.height - 1) {
                             continue;
                         }
-                        
+
                         value = 0.0;
                         for (col = 0; col < head.naxis3; ++col) {
-                            value += (img_loaded[col][fitsY][fitsX] - background_correction[col]) * weightF;
+                            value += (img_loaded[col][y_new][x_new] - background_correction[col]) * weightF;
                         }
-                        if (value > img_variance[0][y_new][x_new]) {
-                            img_variance[0][y_new][x_new] = static_cast<float>(value);
-                            img_variance[1][y_new][x_new] = jd_fraction;
+                        if (value > img_variance[0][fitsY][fitsX]) {
+                            img_variance[0][fitsY][fitsX] = static_cast<float>(value);
+                            img_variance[1][fitsY][fitsX] = jd_fraction;
                         }
                     }
                 }
@@ -2265,25 +2402,28 @@ void stack_comet(int process_as_osc,
             ee = solution_vectorY[1];
             ff = solution_vectorY[2];
             
-            for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                for (fitsX = 0; fitsX < head.width; ++fitsX) {
+            // Inverse (gather) nearest-neighbour mapping. The moving-star gate
+            // compares this frame's time to the max-value time recorded per
+            // destination pixel in pass 1 (unit_stack_routines.pas:1921-1939).
+            for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                for (fitsX = 0; fitsX < width_max; ++fitsX) {
                     x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
                     y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                    if (x_new < 0 || x_new > width_max - 1
-                        || y_new < 0 || y_new > height_max - 1) {
+                    if (x_new < 0 || x_new > head.width - 1
+                        || y_new < 0 || y_new > head.height - 1) {
                         continue;
                     }
-                    
+
                     auto keep = !init
-                        || std::abs(jd_fraction - img_variance[1][y_new][x_new]) > delta_JD_required;
+                        || std::abs(jd_fraction - img_variance[1][fitsY][fitsX]) > delta_JD_required;
                     if (!keep) {
                         continue;
                     }
-                    
+
                     for (col = 0; col < head.naxis3; ++col) {
-                        value = (img_loaded[col][fitsY][fitsX] - background_correction[col]) * weightF;
-                        img_final[col][y_new][x_new] += static_cast<float>(value);
-                        img_temp[0][y_new][x_new]    += static_cast<float>(weightF);
+                        value = (img_loaded[col][y_new][x_new] - background_correction[col]) * weightF;
+                        img_final[col][fitsY][fitsX] += static_cast<float>(value);
+                        img_temp[0][fitsY][fitsX]    += static_cast<float>(weightF);
                     }
                 }
             }
@@ -2456,7 +2596,7 @@ void calibration_and_alignment(int process_as_osc,
                 } else {
                     bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
-                    find_quads(starlist1, quad_star_distances1);
+                    find_quads(starlist1, quad_star_distances2);  // reference -> quad2 (gather: solution maps reference -> source)
                     pedestal_s = bck.backgr;
                     if (pedestal_s < 500.0) {
                         pedestal_s = 500.0;
@@ -2507,7 +2647,7 @@ void calibration_and_alignment(int process_as_osc,
                             head.datamax_org = 0xFFFF;
                         }
                         head.pedestal = background_correction;
-                        find_quads(starlist2, quad_star_distances2);
+                        find_quads(starlist2, quad_star_distances1);  // source -> quad1
                         if (find_offset_and_rotation(3, astap::quad_tolerance)) {
                             memo2_message(std::to_string(nr_references) + " of "
                                           + std::to_string(nr_references2) + " quads. "
@@ -2529,7 +2669,7 @@ void calibration_and_alignment(int process_as_osc,
             if (solution) {
                 ++counter;
                 if (use_astrometry_internal) {
-                    astrometric_to_vector();
+                    astrometric_to_vector(head_ref, head);
                 }
                 
                 aa = solution_vectorX[0];
@@ -2539,18 +2679,33 @@ void calibration_and_alignment(int process_as_osc,
                 ee = solution_vectorY[1];
                 ff = solution_vectorY[2];
                 
-                for (fitsY = 0; fitsY < head.height; ++fitsY) {
-                    for (fitsX = 0; fitsX < head.width; ++fitsX) {
-                        x_new = static_cast<int>(std::round(aa * fitsX + bb * fitsY + cc));
-                        y_new = static_cast<int>(std::round(dd * fitsX + ee * fitsY + ff));
-                        if (x_new < 0 || x_new > width_max - 1
-                            || y_new < 0 || y_new > height_max - 1) {
+                // Inverse (gather) bilinear resampling onto the reference grid
+                // (unit_stack_routines.pas:2144 -> stack_arrays).
+                for (fitsY = 0; fitsY < height_max; ++fitsY) {
+                    for (fitsX = 0; fitsX < width_max; ++fitsX) {
+                        const auto x_new_f = aa * fitsX + bb * fitsY + cc;
+                        const auto y_new_f = dd * fitsX + ee * fitsY + ff;
+                        x_new = static_cast<int>(x_new_f);
+                        y_new = static_cast<int>(y_new_f);
+                        if (x_new <= 0 || x_new >= head.width - 1
+                            || y_new <= 0 || y_new >= head.height - 1) {
                             continue;
                         }
+                        const auto x_frac = x_new_f - x_new;
+                        const auto y_frac = y_new_f - y_new;
+                        const auto w00 = (1.0 - x_frac) * (1.0 - y_frac);
+                        const auto w10 =        x_frac  * (1.0 - y_frac);
+                        const auto w01 = (1.0 - x_frac) *        y_frac;
+                        const auto w11 =        x_frac  *        y_frac;
                         for (col = 0; col < head.naxis3; ++col) {
-                            img_average[col][y_new][x_new] += static_cast<float>(
-                                img_loaded[col][fitsY][fitsX] + background_correction);
-                            img_temp[col][y_new][x_new] += 1.0f;
+                            const auto val =
+                                img_loaded[col][y_new    ][x_new    ] * w00
+                              + img_loaded[col][y_new    ][x_new + 1] * w10
+                              + img_loaded[col][y_new + 1][x_new    ] * w01
+                              + img_loaded[col][y_new + 1][x_new + 1] * w11;
+                            img_average[col][fitsY][fitsX] += static_cast<float>(
+                                val + background_correction);
+                            img_temp[col][fitsY][fitsX] += 1.0f;
                         }
                     }
                 }

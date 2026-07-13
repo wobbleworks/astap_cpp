@@ -147,12 +147,20 @@ void stack_comet(int process_as_osc,
                  int& counter);
                  
 ///----------------------------------------
-/// @brief Convert the astrometric solution of the current image into a
-///        first-order vector solution stored in @ref solution_vectorX and
-///        @ref solution_vectorY.
+/// @brief Convert the astrometric solution into a first-order vector solution
+///        stored in @ref solution_vectorX and @ref solution_vectorY.
+/// @details Faithful to Pascal @c astrometric_to_vector(headA, headB): the
+///          solution maps a @p headA pixel onto @p headB. Callers that gather
+///          (iterate the reference grid and read the source) pass
+///          @c (head_ref, head) so the vectors map reference -> source; the
+///          mosaic scatter path passes @c (head, head_ref) for source ->
+///          reference. The @c sin / @c cos of each header's @c dec0 are
+///          recomputed internally, so no global pre-seeding is required.
+///   @param headA Frame whose pixel is the input of the mapping.
+///   @param headB Frame whose pixel is the output of the mapping.
 ///----------------------------------------
 
-void astrometric_to_vector();
+void astrometric_to_vector(const Header& headA, const Header& headB);
 
 ///----------------------------------------
 /// @brief Pre-compute @c sin / @c cos of @c head.dec0 and @c head_ref.dec0.
