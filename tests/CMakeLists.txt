@@ -258,3 +258,24 @@ if(EXISTS "${ASTAP_CLI_BIN}")
 else()
 	message(STATUS "CLI binary not found — skipping stack_test.")
 endif()
+
+# ---- Artificial-stars / distortion self-consistency test --------------------
+
+# Solves a corpus frame with the local star database, then exercises the two
+# headless annotation features through the CLI (-artificialstars, -distortion).
+# No astap_cli oracle exists (both are GUI-only / online-only in the original),
+# so this is a self-consistency test. Skips when the binary, database, or corpus
+# images are absent.
+if(EXISTS "${ASTAP_CLI_BIN}")
+	add_executable(annotation_features_test annotation_features_test.cpp)
+	target_include_directories(annotation_features_test PRIVATE "${ASTAP_DOCTEST_HEADERS}")
+	target_compile_definitions(annotation_features_test PRIVATE
+		ASTAP_BIN_PATH="${ASTAP_CLI_BIN}"
+		ASTAP_CORPUS_DIR="${ASTAP_CORPUS_DIR}"
+		ASTAP_DB_DIR="${ASTAP_DB_DIR}")
+	target_compile_features(annotation_features_test PRIVATE cxx_std_23)
+	add_test(NAME annotation_features_test COMMAND annotation_features_test)
+	message(STATUS "annotation_features_test: db=${ASTAP_DB_DIR} corpus=${ASTAP_CORPUS_DIR}")
+else()
+	message(STATUS "CLI binary not found — skipping annotation_features_test.")
+endif()

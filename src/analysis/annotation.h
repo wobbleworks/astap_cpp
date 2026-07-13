@@ -4,9 +4,11 @@
 /// Image annotation utilities — ported from unit_annotation.pas.
 ///
 /// Provides a built-in 5x9 bitmap font, text-to-image rendering,
-/// coordinate transforms, and deep-sky object lookup.  GUI-dependent
-/// procedures (plot_deepsky, plot_vsx_vsp, measure_distortion, etc.)
-/// are intentionally omitted.
+/// coordinate transforms, deep-sky object lookup, a headless artificial
+/// star-field plotter, and a headless astrometric-distortion measurement.
+/// The GUI-only halves of the original procedures (canvas drawing in
+/// plot_deepsky, plot_vsx_vsp, measure_distortion) are intentionally omitted;
+/// only the array-writing and value-returning computations are ported.
 
 #include "../types.h"
 
@@ -565,5 +567,106 @@ struct LabelBox {
 [[nodiscard]]
 std::vector<LabelBox> layout_labels(std::span<const LabelInput> labels,
                                     int image_width, int image_height);
+
+// ---------------------------------------------------------------------------
+// Artificial star field (headless, single-pixel magnitude plotting)
+// ---------------------------------------------------------------------------
+
+/// Outcome of plot_artificial_stars.
+struct ArtificialStarsResult {
+	bool ok{};          ///< Pascal function result: true once >= 1 star is plotted.
+	int star_count{};   ///< Catalog stars written into the image.
+};
+
+/// Plot each catalog star as a single pixel whose value encodes its magnitude.
+///
+/// Mirrors unit_annotation.pas plot_artificial_stars, reconstructed onto the
+/// local HNSKY star-database read path (find_areas / open_database /
+/// readdatabase290 — the same reader the solver and photometric calibration
+/// use). The original's tile-based branch was commented out in favour of the
+/// online VizieR path; this port restores the local branch and drops the
+/// out-of-scope online branch entirely.
+///
+/// For every catalog star inside the frame, the pixel at its projected position
+/// (channel 0) is set to the star's magnitude (in Pascal's magnitude*10 units,
+/// matching the reader): an empty pixel (>= 1000) receives the magnitude
+/// directly; an already-occupied pixel is flux-combined with the new star via
+/// -2.5*log10(10^(-0.4*a) + 10^(-0.4*b)). The result is a synthetic reference
+/// frame for supernova / minor-planet blink comparison.
+///
+/// Only channel 0 is written; @p img must already be sized to the solved frame
+/// (the caller pre-fills channel 0 with the 1000 "empty" sentinel, as the
+/// original does). A star fainter than head.magn_limit + 1 magnitude is skipped;
+/// when head.magn_limit is uncalibrated (<= 0, i.e. no photometric pass ran)
+/// the faint cut is disabled and the whole local catalog in the field is plotted.
+///
+/// @param img              Destination image buffer; channel 0 is written.
+/// @param head             Solved FITS header (needs naxis and cd1_1 set).
+/// @param star_database    Database prefix to select, or empty for FOV auto-select.
+/// @return ok / star_count. ok is false when the image is unsolved or no local
+///         database is available.
+[[nodiscard]]
+ArtificialStarsResult plot_artificial_stars(ImageArray& img, const Header& head,
+                                            const std::string& star_database = "");
+
+// ---------------------------------------------------------------------------
+// Astrometric distortion measurement (headless residual computation)
+// ---------------------------------------------------------------------------
+
+/// One catalog star's projected and measured pixel positions (Pascal
+/// distortion_data columns 0..3).
+struct DistortionSample {
+	double x{};   ///< Projected (catalog) X in image pixels.
+	double y{};   ///< Projected (catalog) Y in image pixels.
+	double xc{};  ///< HFD-measured centroid X in image pixels.
+	double yc{};  ///< HFD-measured centroid Y in image pixels.
+};
+
+/// Result of measure_distortion — the headless computation only.
+struct DistortionResult {
+	int stars_measured{};  ///< Stars with a valid HFD centroid (distortion_data size).
+	int stars_inner{};     ///< Sky->pixel samples inside 0.25*height radius (sub_counter).
+	int stars_outer{};     ///< Sky->pixel samples outside 0.5*height radius (sub_counter2).
+	int stars_inner_ps{};  ///< Pixel->sky samples, inner (sub_counter3).
+	int stars_outer_ps{};  ///< Pixel->sky samples, outer (sub_counter4).
+
+	/// Median |projected - measured| separation, in pixels (Pascal
+	/// astrometric_error_innner / _outer, "Sky->Pixel error").
+	double sky_pixel_error_inner{};
+	double sky_pixel_error_outer{};
+
+	/// Median angular separation between the measured centroid re-projected to
+	/// the sky and the catalog position, in radians (Pascal
+	/// astrometric_error_innnerPS / _outerPS, "Pixel->Sky error").
+	double pixel_sky_error_inner{};
+	double pixel_sky_error_outer{};
+
+	std::vector<DistortionSample> distortion_data;  ///< Per measured star.
+};
+
+/// Measure the astrometric residual of a solved image against the local catalog.
+///
+/// Mirrors unit_annotation.pas measure_distortion, but only the headless
+/// computation: for every catalog star it runs @c HFD at the projected pixel to
+/// recover the measured centroid (xc, yc), then accumulates the sky->pixel and
+/// pixel->sky residuals split by radius from CRPIX (inner: within 0.25*height;
+/// outer: beyond 0.5*height) and reports their medians. The GUI distortion-
+/// vector overlay and the pixel/arcsecond scale bars are intentionally dropped.
+///
+/// Catalog stars come from the same local read path as the solver
+/// (find_areas / open_database / readdatabase290); the online branch is out of
+/// scope. The projection uses celestial_to_pixel, which honours the module SIP
+/// state (see the .cpp note on the dropped per-call usethesip flag).
+///
+/// @param img              Loaded image to measure against.
+/// @param head             Solved FITS header (needs naxis and cd1_1 set).
+/// @param formalism        Projection formalism forwarded to pixel_to_celestial.
+/// @param star_database    Database prefix to select, or empty for FOV auto-select.
+/// @return The measured residual medians and per-star samples; an all-zero
+///         result when the image is unsolved or no local database is available.
+[[nodiscard]]
+DistortionResult measure_distortion(const ImageArray& img, const Header& head,
+                                    int formalism = 0,
+                                    const std::string& star_database = "");
 
 }  // namespace astap::analysis

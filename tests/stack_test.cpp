@@ -300,6 +300,13 @@ TEST_CASE("sigma-clip combine also aligns and solves to the same field") {
 	fs::remove_all(s.dir);
 }
 
+// NOTE: no automated mosaic test. -mosaic dispatches the real stack_mosaic, but
+// its per-pixel seam-blend (median_background over overlaps) is only cheap when
+// tiles ABUT with small overlaps. The only multi-frame corpus here (M31 a/b/c)
+// fully overlaps, which is both a degenerate mosaic input and pathologically slow
+// (~60s/frame). Verified manually instead: a fully-overlapping M31 mosaic solves
+// to the M31 field. A proper mosaic test needs a tiled corpus.
+
 TEST_CASE("batch stack applies a master dark (calibration wiring)") {
 	if (!assets_available()) return;
 	auto s = stage_m31("dark");
@@ -357,6 +364,67 @@ TEST_CASE("reference frame is chosen by quality, not input order") {
 	// For the M31 set the sharpest frame is not the first input, so the chosen
 	// reference must differ from frame [0] of the forward order.
 	CHECK(ref_fwd != s.files.front().filename().string());
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("calibrate-and-align writes aligned frames that solve to the field") {
+	if (!assets_available()) return;
+	auto s = stage_m31("calib");
+	if (s.count < 2) { MESSAGE("need >= 2 M31 frames — skipping"); return; }
+
+	const std::string db = " -d " + q(kDbDir.string());
+	const auto st = run(q(kPortBin) + " -calibrate" + db + s.frame_args);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "CALIBRATED=") == "1");
+	CHECK(field(st.out, "FRAMES_ALIGNED=") == std::to_string(s.count));
+
+	// One "<stem>_aligned.fit" per input, beside it.
+	auto aligned = s.files.back();
+	aligned.replace_extension("");
+	aligned = aligned.string() + "_aligned.fit";
+	REQUIRE(fs::exists(aligned));
+
+	// The aligned frame carries the reference grid's solution: it re-solves to
+	// M31 with the stored WCS essentially matching (small delta), stars sharp.
+	const auto base = s.dir / "asolve";
+	const auto sv = run(q(kPortBin) + " -f " + q(aligned.string()) + db
+	                    + " -o " + q(base.string()));
+	auto ini = base; ini.replace_extension(".ini");
+	REQUIRE(fs::exists(ini));
+	CHECK(ini_value(ini, "CRVAL1=") == doctest::Approx(10.7).epsilon(0.05));
+	CHECK(ini_value(ini, "CRVAL2=") == doctest::Approx(41.24).epsilon(0.05));
+	CHECK(selected_stars(sv.out) > 300);
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("quality-outlier rejection drops the weakest frame") {
+	if (!assets_available()) return;
+	auto s = stage_m31("outlier");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+
+	const std::string db = " -d " + q(kDbDir.string());
+	auto stack_sd = [&](const std::string& sd) -> RunResult {
+		const auto out = s.dir / "o.fits";
+		return run(q(kPortBin) + " -stackfiles -sd " + sd + " -o " + q(out.string())
+		           + db + s.frame_args);
+	};
+
+	// A tight sigma rejects the lowest-quality frame; the survivors still combine.
+	const auto tight = stack_sd("1.0");
+	CHECK(tight.exit_code == 0);
+	CHECK(field(tight.out, "FRAMES_SOLVED=") == "3");
+	CHECK(field(tight.out, "FRAMES_KEPT=") == "2");
+	CHECK(field(tight.out, "FRAMES_COMBINED=") == "2");
+	// The rejected frame must not be the chosen reference.
+	CHECK(!field(tight.out, "REFERENCE=").empty());
+
+	// A loose sigma keeps every frame (nothing sits that far below the mean).
+	const auto loose = stack_sd("5.0");
+	CHECK(loose.exit_code == 0);
+	CHECK(field(loose.out, "FRAMES_KEPT=") == "3");
+	CHECK(field(loose.out, "FRAMES_COMBINED=") == "3");
 
 	fs::remove_all(s.dir);
 }
@@ -471,6 +539,37 @@ TEST_CASE("master-frame creation averages raw frames into a mono FITS") {
 	CHECK(fits_header_int(master, "DARK_CNT=") == s.count);
 	CHECK(fits_header_int(master, "NAXIS   =") == 2);       // any colour → mono
 	CHECK(fits_header_int(master, "BITPIX  =") == -32);
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("master-flat creation subtracts a flat-dark (bias)") {
+	if (!assets_available()) return;
+	auto s = stage_m31("mkflat");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+
+	// Two frames as flats, one as the flat-dark. Content is a stand-in; the point
+	// is the flat-dark is combined and subtracted, and the header records it.
+	const auto master = s.dir / "master_flat.fit";
+	const auto st = run(q(kPortBin) + " -makeflat -o " + q(master.string())
+	                    + " -flatdark " + q(s.files[2].string())
+	                    + " " + q(s.files[0].string()) + " " + q(s.files[1].string()));
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "MASTER=") == "1");
+	CHECK(field(st.out, "FRAMES_COMBINED=") == "2");
+	CHECK(field(st.out, "FLATDARKS_COMBINED=") == "1");
+	REQUIRE(fs::exists(master));
+
+	// Header: flat + bias counts recorded, CALSTAT gains 'B', still mono float.
+	CHECK(fits_header_int(master, "FLAT_CNT=") == 2);
+	CHECK(fits_header_int(master, "BIAS_CNT=") == 1);
+	CHECK(fits_header_int(master, "NAXIS   =") == 2);
+	{
+		std::ifstream ifs(master, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("CALSTAT = 'B") != std::string::npos);
+	}
 
 	fs::remove_all(s.dir);
 }

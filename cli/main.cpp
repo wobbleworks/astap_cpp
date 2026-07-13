@@ -55,6 +55,7 @@
 #include "../src/core/util.h"            // fits_file_name, tiff_file_name, strtofloat2
 #include "../src/core/imaging.h"         // bin_X2X3X4
 #include "../src/reference/star_database.h"       // database_path, name_database
+#include "../src/analysis/annotation.h"           // plot_artificial_stars, measure_distortion
 #include "../src/solving/astrometric_solving.h"   // solve_image
 #include "../src/stacking/stack.h"       // analyse_image, Background
 #include "../src/stacking/stack_driver.h"         // stack_files (batch stacker)
@@ -137,6 +138,8 @@ struct Args {
     bool                       makebias = false;      // create a master bias
     bool                       lrgb = false;          // combine per-channel frames to colour
     bool                       calibrate = false;     // calibrate+align only (no combine)
+    bool                       artificial_stars = false; // synthesize a catalog star field
+    bool                       distortion = false;    // report astrometric distortion
     std::optional<std::string> file;
     std::optional<double>      radius_deg;
     std::optional<double>      fov_deg;
@@ -297,6 +300,8 @@ Args parse_args(int argc, char* argv[]) {
         if (take_flag(arg, "makebias"))   { out.makebias = true; continue; }
         if (take_flag(arg, "lrgb"))       { out.lrgb = true; continue; }
         if (take_flag(arg, "calibrate"))  { out.calibrate = true; continue; }
+        if (take_flag(arg, "artificialstars")) { out.artificial_stars = true; continue; }
+        if (take_flag(arg, "distortion")) { out.distortion = true; continue; }
 
         // Optional-value options. -sip disables on 'n' (else enables); -check
         // enables *only* on 'y' (bare -check is off in the CLI oracle);
@@ -418,6 +423,8 @@ void print_help(std::ostream& os) {
         "\n"
         "Extra options:\n"
         "-annotate  {Produce deepsky annotated jpg file}\n"
+        "-artificialstars  {Solve, then write a synthetic star field (single-pixel magnitudes) as <base>_artificial.fits}\n"
+        "-distortion  {Solve, then report the median astrometric sky<->pixel error using the local star database}\n"
         "-tofits  binning[1,2,3,4]  {Make new fits file from PNG/JPG file input}\n"
         "-sqm pedestal  {add measured sqm, centalt, airmass values to the solution}\n"
         "-focus1 file1.fit -focus2 file2.fit ....  {Find best focus using files and hyperbola curve fitting.\n"
@@ -615,6 +622,55 @@ int run_solve(const Args& a, const std::filesystem::path& output_base) {
 
     (void)astap::core::write_ini(output_base, true);
     astap::core::add_long_comment(astap::memo1_lines, "cmdline:" + a.raw_cmdline);
+
+    // -distortion: measure the astrometric residual against the local catalog
+    // and report the median sky<->pixel errors (Pascal measure_distortion, the
+    // headless computation only). Uses the linear (non-SIP) projection.
+    if (a.distortion) {
+        const auto d = astap::analysis::measure_distortion(
+            astap::img_loaded, astap::head, /*formalism=*/0,
+            a.database_name.value_or(""));
+        const double cdelt = std::abs(astap::head.cdelt2);
+        const double rad2deg = 180.0 / std::numbers::pi;
+        const double ps_in_as  = d.pixel_sky_error_inner * rad2deg * 3600.0;
+        const double ps_out_as = d.pixel_sky_error_outer * rad2deg * 3600.0;
+        const double ps_in_px  = (cdelt > 0.0) ? d.pixel_sky_error_inner * rad2deg / cdelt : 0.0;
+        const double ps_out_px = (cdelt > 0.0) ? d.pixel_sky_error_outer * rad2deg / cdelt : 0.0;
+        astap::core::memo2_message(std::format(
+            "Pixel->Sky error inside {:.4f}\" or {:.4f} pixel using {} stars."
+            " Outside {:.4f}\" or {:.4f} pixel using {} stars.",
+            ps_in_as, ps_in_px, d.stars_inner_ps, ps_out_as, ps_out_px, d.stars_outer_ps));
+        astap::core::memo2_message(std::format(
+            "Sky->Pixel error inside {:.4f}\" or {:.4f} pixel using {} stars."
+            " Outside {:.4f}\" or {:.4f} pixel using {} stars.",
+            d.sky_pixel_error_inner * cdelt * 3600.0, d.sky_pixel_error_inner, d.stars_inner,
+            d.sky_pixel_error_outer * cdelt * 3600.0, d.sky_pixel_error_outer, d.stars_outer));
+        astap::core::memo2_message(std::format(
+            "Distortion stars measured: {}", d.stars_measured));
+    }
+
+    // -artificialstars: synthesize a single-plane catalog star field (each
+    // catalog star a single pixel whose value encodes its magnitude) and save
+    // it as a float FITS beside the input, for supernova / minor-planet search.
+    if (a.artificial_stars) {
+        astap::ImageArray art(
+            1, std::vector<std::vector<float>>(
+                   astap::head.height,
+                   std::vector<float>(astap::head.width, 1000.0f)));
+        const auto r = astap::analysis::plot_artificial_stars(
+            art, astap::head, a.database_name.value_or(""));
+        astap::core::memo2_message(std::format(
+            "Artificial stars plotted: {}", r.star_count));
+        if (r.ok) {
+            std::filesystem::path art_out = output_base;
+            art_out.replace_extension();
+            art_out += "_artificial.fits";
+            std::vector<std::string> art_memo = astap::memo1_lines;
+            if (!astap::core::save_fits(art, art_memo, art_out, -32, true)) {
+                std::cerr << "astap: failed to write artificial star field\n";
+            }
+        }
+    }
 
     // -update: write the found solution back to the input file.
     if (a.update_input) {

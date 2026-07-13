@@ -139,6 +139,12 @@ private:
     
     // Saved FITS header text from the first frame.
     std::string memo1_text_;
+
+    // Snapshot of the first accepted frame's header cards. update_header restores
+    // this before writing the accumulated keywords, so each rewrite starts from a
+    // clean first-frame header rather than one a previous rewrite already mutated
+    // (Pascal `memo1_text`).
+    std::vector<std::string> header_snapshot_;
     
     // Per-stack accumulators.
     bool init_          = false;

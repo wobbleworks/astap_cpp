@@ -125,11 +125,14 @@ void LiveStackSession::reset_var() noexcept {
     init_        = false;
     counter_     = 0;
     bad_counter_ = 0;
-    // TODO(astap_main globals): also reset
-    //   sum_exp = 0; sum_temp = 0;
-    //   jd_sum = 0; jd_start_first = 1e99; jd_end_last = 0;
-    //   light_exposure = 987654321; light_temperature = 987654321;
-    //   flat_filter = "987654321";
+    // Reset the exposure / temperature / Julian-day accumulators that feed the
+    // running stacked header (unit_live_stacking.pas:142-145).
+    astap::sum_exp        = 0.0;
+    astap::sum_temp       = 0.0;
+    astap::jd_sum         = 0.0;
+    astap::jd_start_first = 1e99;
+    astap::jd_end_last    = 0.0;
+    header_snapshot_.clear();
 }
 
 bool LiveStackSession::file_available(const fs::path& dir,
@@ -183,10 +186,36 @@ bool LiveStackSession::save_as_jpg(const fs::path& path,
 }
 
 void LiveStackSession::update_header() {
-    // TODO: rewrite once the FITS header helpers (update_text/update_integer/
-    // update_generic, JdToDate, head.*) are ported. The original mutates the
-    // in-memory header text: COMMENT 1, HISTORY 1, EXPTIME, CALSTAT, DATE-OBS,
-    // JD-AVG, DATE-AVG, LIGH_CNT, DARK_CNT, FLAT_CNT, BIAS_CNT.
+    if (counter_ <= 0) { return; }
+
+    // Start from the first frame's header, then overwrite with the accumulated
+    // stacking metadata (unit_live_stacking.pas:68-90).
+    auto& memo = astap::memo1_lines;
+    memo = header_snapshot_;
+
+    astap::core::update_text(memo, "COMMENT 1",
+        "  Written by Astrometric Stacking Program. www.hnsky.org");
+    astap::core::update_text(memo, "HISTORY 1", "  Stacking method LIVE STACKING");
+    astap::core::update_integer(memo, "EXPTIME =",
+        " / Total luminance exposure time in seconds.      ",
+        static_cast<int>(std::lround(astap::sum_exp)));
+    astap::core::update_text(memo, "CALSTAT =", "'" + astap::head.calstat + "'");
+    astap::core::update_text(memo, "DATE-OBS=",
+        "'" + jd_to_date(astap::jd_start_first) + "'");
+    const double jd_avg = astap::jd_sum / counter_;
+    astap::core::update_generic(memo, "JD-AVG  ",
+        std::format("{:.6f}", jd_avg),
+        "Julian Day of the observation mid-point.       ");
+    astap::head.date_avg = jd_to_date(jd_avg);
+    astap::core::update_text(memo, "DATE-AVG=", "'" + astap::head.date_avg + "'");
+    astap::core::update_integer(memo, "LIGH_CNT=",
+        " / Light frames combined.                  ", counter_);
+    astap::core::update_integer(memo, "DARK_CNT=",
+        " / Darks used for luminance.               ", astap::head.dark_count);
+    astap::core::update_integer(memo, "FLAT_CNT=",
+        " / Flats used for luminance.               ", astap::head.flat_count);
+    astap::core::update_integer(memo, "BIAS_CNT=",
+        " / Flat-darks used for luminance.          ", astap::head.flatdark_count);
 }
 
 void LiveStackSession::emit_frame_added() {
@@ -210,24 +239,35 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
         return false;
     }
 
-    // Detect mount slew via change in (ra0, dec0).
+    // Detect mount slew via change in (ra0, dec0). A slew starts a fresh stack
+    // AND skips this frame — the exposure spanning the slew may be trailed
+    // (transition_image, unit_live_stacking.pas:181-219). A slew at the very
+    // start (total_counter_ == 0) does not skip.
+    bool transition_image = false;
     const auto distance = ang_sep(astap::head.ra0, astap::head.dec0,
                                   old_ra0_, old_dec0_);
     old_ra0_  = astap::head.ra0;
     old_dec0_ = astap::head.dec0;
     if (distance > (0.2 * kPi / 180.0) && total_counter_ != 0) {
-        emit_message("Mount slew detected — restarting stack.");
+        emit_message("Mount slew detected — restarting stack; skipping the "
+                     "transition frame.");
         reset_var();
+        transition_image = true;
     }
 
     // Exposure change resets the accumulator (mixing different exposures
-    // would need weighted averaging; simpler to start fresh).
-    if (total_counter_ != 0 && old_exposure_ != 0.0 &&
-        std::abs(astap::head.exposure - old_exposure_) > 0.01) {
+    // would need weighted averaging; simpler to start fresh). Unlike a slew this
+    // does not skip the frame (unit_live_stacking.pas:211-216).
+    else if (total_counter_ != 0 && old_exposure_ != 0.0 &&
+             std::abs(astap::head.exposure - old_exposure_) > 0.01) {
         emit_message("Exposure changed — restarting stack.");
         reset_var();
     }
     old_exposure_ = astap::head.exposure;
+
+    if (transition_image) {
+        return false;  // possibly slew-trailed — do not stack this frame
+    }
 
     (void)apply_dark_and_flat(astap::img_loaded, astap::head);
 
@@ -246,6 +286,9 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
         old_width_  = astap::head.width;
         old_height_ = astap::head.height;
         binning_    = report_binning(astap::head.height);
+        // Snapshot the first frame's header for the running stacked header
+        // (Pascal saves memo1_text here, unit_live_stacking.pas:233).
+        header_snapshot_ = astap::memo1_lines;
         img_average_.assign(astap::head.naxis3,
             std::vector<std::vector<float>>(astap::head.height,
                 std::vector<float>(astap::head.width, 0.0f)));
@@ -286,6 +329,15 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
     ++counter_;
     ++total_counter_;
 
+    // Accumulate exposure / temperature / Julian-day totals for the stacked
+    // header (unit_live_stacking.pas:335-344). The live path tracks only the
+    // start date and the midpoint sum (no jd_end_last, unlike the batch stackers).
+    astap::sum_exp  += astap::head.exposure;
+    astap::sum_temp += astap::head.set_temperature;
+    date_to_jd(astap::head.date_obs, astap::head.date_avg, astap::head.exposure);
+    astap::jd_start_first = std::min(astap::jd_start, astap::jd_start_first);
+    astap::jd_sum        += astap::jd_mid;
+
     // Running-average accumulation. calc_newx_newy maps (fitsX+1, fitsY+1)
     // through solution_vectorX/Y (vector-based branch) to reference pixel
     // space, leaving results in x_new_float / y_new_float (0-based).
@@ -313,6 +365,9 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
     astap::img_loaded = img_average_;
     astap::head = astap::head_ref;
     astap::head.light_count = counter_;
+
+    // Refresh the in-memory FITS header with the accumulated stacking metadata.
+    update_header();
 
     emit_message("Added " + filename.filename().string() +
                  " — total " + std::to_string(counter_) + ".");
