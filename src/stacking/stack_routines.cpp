@@ -280,8 +280,10 @@ void astrometric_to_vector(const Header& headA, const Header& headB) {
     sincos(headB.dec0, sinB, cosB);
 
     // Forward astrometric map of a headA pixel onto headB pixel space. This is
-    // the astrometric branch of calc_newx_newy parameterised on (A, B); with
-    // a_order == 0 the SIP terms drop out (unit_stack_routines.pas:41-104).
+    // the astrometric branch of calc_newx_newy parameterised on (A, B)
+    // (unit_stack_routines.pas:41-104). Forward SIP (a_*/b_*) drops out because
+    // a_order == 0 is forced above; the inverse SIP (ap_*/bp_*) into headB is
+    // still applied below, keyed on ap_order, exactly as Pascal does.
     constexpr auto kPi = 3.14159265358979323846;
     auto map_pt = [&](double fitsX, double fitsY, double& xo, double& yo) {
         const auto u = fitsX - headA.crpix1;
@@ -306,8 +308,26 @@ void astrometric_to_vector(const Header& headA, const Header& headB) {
         const auto det = headB.cd2_2 * headB.cd1_1 - headB.cd1_2 * headB.cd2_1;
         const auto u0  = -(headB.cd1_2 * dDec - headB.cd2_2 * dRa) / det;
         const auto v0  = +(headB.cd1_1 * dDec - headB.cd2_1 * dRa) / det;
-        xo = (headB.crpix1 + u0) - 1.0;   // 0..width-1
-        yo = (headB.crpix2 + v0) - 1.0;
+        if (ap_order >= 2) {
+            // Inverse-SIP correction up to third order, in the frame being
+            // projected into (headB). Mirrors the faithful standalone
+            // calc_newx_newy (stack_routines.h) and Pascal calc_newx_newy
+            // (unit_stack_routines.pas:93-102). The ap_0_0 / bp_0_0 constant
+            // term is intentionally omitted, matching both.
+            xo = (headB.crpix1 + u0
+                  + ap_0_1 * v0 + ap_0_2 * v0 * v0 + ap_0_3 * v0 * v0 * v0
+                  + ap_1_0 * u0 + ap_1_1 * u0 * v0 + ap_1_2 * u0 * v0 * v0
+                  + ap_2_0 * u0 * u0 + ap_2_1 * u0 * u0 * v0
+                  + ap_3_0 * u0 * u0 * u0) - 1.0;
+            yo = (headB.crpix2 + v0
+                  + bp_0_1 * v0 + bp_0_2 * v0 * v0 + bp_0_3 * v0 * v0 * v0
+                  + bp_1_0 * u0 + bp_1_1 * u0 * v0 + bp_1_2 * u0 * v0 * v0
+                  + bp_2_0 * u0 * u0 + bp_2_1 * u0 * u0 * v0
+                  + bp_3_0 * u0 * u0 * u0) - 1.0;
+        } else {
+            xo = (headB.crpix1 + u0) - 1.0;   // 0..width-1
+            yo = (headB.crpix2 + v0) - 1.0;
+        }
     };
 
     auto centerX = 0.0, centerY = 0.0;

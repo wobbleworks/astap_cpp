@@ -137,9 +137,8 @@ void aberration_correction_equatorial(double julian_et, double& ra, double& dec)
     auto z0 = 0.0;
     cart2(1.0, dec, ra, x0, y0, z0);
     
-    // Barycentric Earth velocity (AU/day). NOTE: the new API's
-    // barycentric frame currently coincides with heliocentric (sub-0.01
-    // AU offset); error in aberration is < 0.001 arcsec — acceptable.
+    // True barycentric (SSB → Earth) velocity, AU/day: earth_state accumulates
+    // the SSB → Sun series onto the Sun → Earth position.
     const auto earth = ephem::earth_state(julian_et, ephem::ReferenceFrame::Barycentric);
 
     // Convert AU/day to fraction of speed of light (~1/173)
