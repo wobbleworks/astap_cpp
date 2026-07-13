@@ -21,6 +21,7 @@
 #include <QWidget>
 
 #include <memory>
+#include <vector>
 
 class QCheckBox;
 class QComboBox;
@@ -64,23 +65,35 @@ private slots:
 	void removeSelected();
 	void clearList();
 	void startStack();
-	// Dark / flat candidate-library management (mirrors the Pascal dark/flat tabs).
+	// Dark / flat / flat-dark candidate-library management (mirrors the Pascal tabs).
 	void addDarkFiles();
 	void addFlatFiles();
+	void addFlatDarkFiles();
 	void removeDarks();
 	void removeFlats();
+	void removeFlatDarks();
 	void clearDarks();
 	void clearFlats();
+	void clearFlatDarks();
+	// "Replace check-marked by … master" — combine checked raw frames into master(s)
+	// and swap them into the table (Pascal replace_by_master_dark/flat1Click).
+	void replaceDarksByMaster();
+	void replaceFlatsByMaster();
 
 private:
 	void buildLightsTab();
 	void buildDarksTab();
 	void buildFlatsTab();
+	void buildFlatDarksTab();
 	void buildSettingsTab();
 	QWidget* buildClassifyBar();
 	void applySettingsToEngine();
 	void applyLibrariesToEngine();
 	void addMasterFiles(QTableWidget* table, const QString& title);
+	bool insertMasterRow(QTableWidget* table, const QString& path);
+	void replaceRows(QTableWidget* table,
+	                 const std::vector<QString>& consumed,
+	                 const std::vector<QString>& created);
 	void removeSelectedRows(QTableWidget* table);
 	void refreshCompatibility();
 	void updateCompatibility(QTableWidget* table, bool isFlat,
@@ -97,8 +110,11 @@ private:
 	QPushButton* _clearButton = nullptr;
 
 	// Darks / Flats candidate tables (the master library the engine matches from).
+	// The Flat darks table holds the raw flat-dark/bias frames subtracted during
+	// master-flat creation (Pascal listview4).
 	QTableWidget* _darkTable = nullptr;
 	QTableWidget* _flatTable = nullptr;
+	QTableWidget* _flatDarkTable = nullptr;
 
 	// Pre-analysed metadata cache (path → header fields) so the Compatibility
 	// column doesn't re-read every candidate header on each classify change.
@@ -113,6 +129,14 @@ private:
 	QCheckBox* _classDarkGain = nullptr;
 	QCheckBox* _classFlatFilter = nullptr;
 	QSpinBox*  _deltaTemp = nullptr;
+
+	// Per-tab "… for master creation" grouping options (Pascal classify_dark_date1 /
+	// classify_flat_date1 / classify_flat_duration1). These govern how raw frames are
+	// grouped into masters by the Replace buttons; they do not affect run-time master
+	// selection (which always uses closest-JD).
+	QCheckBox* _classDarkDate = nullptr;
+	QCheckBox* _classFlatDate = nullptr;
+	QCheckBox* _classFlatDuration = nullptr;
 
 	// Settings tab
 	QComboBox* _methodCombo = nullptr;

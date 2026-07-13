@@ -13,6 +13,7 @@
 #include "../../src/core/globals.h"
 #include "../../src/core/image_io.h"
 #include "../../src/stacking/stack.h"
+#include "../../src/stacking/stack_driver.h"   // create_master
 #include "../../src/stacking/stack_routines.h"
 
 #include <QCheckBox>
@@ -41,6 +42,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -132,6 +134,7 @@ StackWindow::StackWindow(QWidget* parent) :
 	buildLightsTab();
 	buildDarksTab();
 	buildFlatsTab();
+	buildFlatDarksTab();
 	buildSettingsTab();
 
 	// Shared "Classify by" bar, visible under the tabs (Pascal classify_groupbox1).
@@ -165,7 +168,7 @@ namespace {
 // no IMAGETYP field / no pixel pass here).
 enum MasterCol {
 	kMFile = 0, kMExp, kMTemp, kMBin, kMSize, kMFilter, kMGain, kMDate, kMJd,
-	kMCompat, kMColCount
+	kMCalstat, kMCompat, kMColCount
 };
 
 // Read the first Lights-tab frame's header (no pixels) as the reference light for
@@ -199,6 +202,18 @@ enum MasterCol {
 	return o;
 }
 
+// Format an exposure the way the Pascal listview does (unit_stack.pas:4415-4417):
+// integer seconds for >= 10 s, otherwise up to 6 significant figures. The flat
+// path keys its grouping / flat-dark pairing / master filename off this string
+// (Pascal compares the raw F_exposure display string, not a rounded value), so a
+// 0.8 s and a 1.2 s flat stay in separate masters instead of both rounding to 1.
+[[nodiscard]] QString format_exposure(double seconds) {
+	if (seconds >= 10.0) {
+		return QString::number(static_cast<long long>(std::lrint(seconds)));
+	}
+	return QString::number(seconds, 'g', 6);
+}
+
 // Create an empty candidate table with the shared columns.
 [[nodiscard]] QTableWidget* make_master_table(QWidget* parent) {
 	auto* t = new QTableWidget(0, kMColCount, parent);
@@ -206,7 +221,7 @@ enum MasterCol {
 		QObject::tr("File"), QObject::tr("Exposure"), QObject::tr("Temperature"),
 		QObject::tr("Binning"), QObject::tr("Size"), QObject::tr("Filter"),
 		QObject::tr("Gain"), QObject::tr("Date"), QObject::tr("JD"),
-		QObject::tr("Compatibility")});
+		QObject::tr("Calibration"), QObject::tr("Compatibility")});
 	t->horizontalHeader()->setSectionResizeMode(kMFile, QHeaderView::Stretch);
 	t->horizontalHeader()->setSectionResizeMode(kMCompat, QHeaderView::Stretch);
 	t->verticalHeader()->setVisible(false);
@@ -243,44 +258,55 @@ void StackWindow::addMasterFiles(QTableWidget* table, const QString& title) {
 	const bool wasSorting = table->isSortingEnabled();
 	table->setSortingEnabled(false);
 	for (const auto& p : paths) {
-		if (existing.contains(p)) {
-			continue;
+		if (!existing.contains(p)) {
+			insertMasterRow(table, p);   // unreadable headers are skipped
 		}
-		astap::stacking::MasterMetadata m;
-		if (!astap::stacking::analyse_master(
-		        std::filesystem::path(p.toStdString()), m)) {
-			continue;  // unreadable header — skip
-		}
-		_masterMeta.insert(p, m);   // cache for refreshCompatibility
-
-		const int row = table->rowCount();
-		table->insertRow(row);
-
-		auto* fileItem = new QTableWidgetItem(QFileInfo(p).fileName());
-		fileItem->setData(Qt::UserRole, p);
-		fileItem->setToolTip(p);
-		fileItem->setFlags(fileItem->flags() | Qt::ItemIsUserCheckable);
-		fileItem->setCheckState(Qt::Checked);
-		table->setItem(row, kMFile, fileItem);
-
-		auto cell = [&](int col, const QString& text) {
-			auto* it = new QTableWidgetItem(text);
-			it->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-			table->setItem(row, col, it);
-		};
-		cell(kMExp,    m.exposure ? QString::number(m.exposure) : QStringLiteral("—"));
-		cell(kMTemp,   QString::number(m.set_temperature));
-		cell(kMBin,    QString::number(m.xbinning, 'g', 3));
-		cell(kMSize,   QString("%1×%2").arg(m.width).arg(m.height));
-		cell(kMFilter, QString::fromStdString(m.filter_name));
-		cell(kMGain,   QString::fromStdString(m.gain));
-		// Calendar date (the YYYY-MM-DD portion of DATE-OBS) — Pascal's default sort.
-		cell(kMDate,   QString::fromStdString(m.date_obs).left(10));
-		cell(kMJd,     QString::number(m.jd, 'f', 3));
-		cell(kMCompat, QString());
 	}
 	table->setSortingEnabled(wasSorting);
 	refreshCompatibility();
+}
+
+// Analyse one candidate FITS (header only) and append a fully-populated row.
+// Shared by addMasterFiles and the Replace-by-master flow. Returns false (and
+// adds nothing) when the header cannot be read.
+bool StackWindow::insertMasterRow(QTableWidget* table, const QString& path) {
+	astap::stacking::MasterMetadata m;
+	if (!astap::stacking::analyse_master(
+	        std::filesystem::path(path.toStdString()), m)) {
+		return false;  // unreadable header — skip
+	}
+	_masterMeta.insert(path, m);   // cache for refreshCompatibility
+
+	const int row = table->rowCount();
+	table->insertRow(row);
+
+	auto* fileItem = new QTableWidgetItem(QFileInfo(path).fileName());
+	fileItem->setData(Qt::UserRole, path);
+	fileItem->setToolTip(path);
+	fileItem->setFlags(fileItem->flags() | Qt::ItemIsUserCheckable);
+	fileItem->setCheckState(Qt::Checked);
+	table->setItem(row, kMFile, fileItem);
+
+	auto cell = [&](int col, const QString& text) {
+		auto* it = new QTableWidgetItem(text);
+		it->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+		table->setItem(row, col, it);
+	};
+	cell(kMExp,     m.exposure_seconds > 0.0 ? format_exposure(m.exposure_seconds)
+	                                         : QStringLiteral("—"));
+	cell(kMTemp,    QString::number(m.set_temperature));
+	cell(kMBin,     QString::number(m.xbinning, 'g', 3));
+	cell(kMSize,    QString("%1×%2").arg(m.width).arg(m.height));
+	cell(kMFilter,  QString::fromStdString(m.filter_name));
+	cell(kMGain,    QString::fromStdString(m.gain));
+	// Calendar date (the YYYY-MM-DD portion of DATE-OBS) — Pascal's default sort.
+	cell(kMDate,    QString::fromStdString(m.date_obs).left(10));
+	cell(kMJd,      QString::number(m.jd, 'f', 3));
+	// CALSTAT: a non-empty value marks a flat that has already been calibrated
+	// (flat-darks subtracted) — the Replace-by-master-flat flow skips those.
+	cell(kMCalstat, QString::fromStdString(m.calstat));
+	cell(kMCompat,  QString());
+	return true;
 }
 
 void StackWindow::removeSelectedRows(QTableWidget* table) {
@@ -359,12 +385,287 @@ void StackWindow::applyLibrariesToEngine() {
 	astap::stacking::set_flat_library(flats);
 }
 
-void StackWindow::addDarkFiles() { addMasterFiles(_darkTable, tr("dark")); }
-void StackWindow::addFlatFiles() { addMasterFiles(_flatTable, tr("flat")); }
-void StackWindow::removeDarks()  { removeSelectedRows(_darkTable); }
-void StackWindow::removeFlats()  { removeSelectedRows(_flatTable); }
-void StackWindow::clearDarks()   { _darkTable->setRowCount(0); refreshCompatibility(); }
-void StackWindow::clearFlats()   { _flatTable->setRowCount(0); refreshCompatibility(); }
+namespace {
+
+// One check-marked candidate row plus its cached (header-only) metadata.
+struct MasterCand {
+	QString path;
+	astap::stacking::MasterMetadata m;
+};
+
+// Average of the group's set temperatures (Pascal temperatureRound = round(avg)).
+[[nodiscard]] int average_set_temperature(const std::vector<MasterCand>& group) {
+	if (group.empty()) {
+		return 0;
+	}
+	long long sum = 0;
+	for (const auto& c : group) {
+		sum += c.m.set_temperature;
+	}
+	return static_cast<int>(std::lrint(static_cast<double>(sum) / group.size()));
+}
+
+// Pascal extract_letters_and_numbers_only: keep A–Z, a–z, 0–9 and '-'.
+[[nodiscard]] QString sanitize_filter(const std::string& in) {
+	QString out;
+	for (const char ch : in) {
+		if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '-') {
+			out.append(QChar::fromLatin1(ch));
+		}
+	}
+	return out;
+}
+
+// Gather the check-marked rows of @p table, using the metadata cache (no header
+// re-read). Rows whose filename contains @p masterMarker are skipped (already a
+// master); pass nullptr to keep every check-marked row. Rows without cached
+// metadata are skipped.
+[[nodiscard]] std::vector<MasterCand> checked_raws(
+		QTableWidget* table, int fileCol,
+		const QHash<QString, astap::stacking::MasterMetadata>& cache,
+		const char* masterMarker) {
+	std::vector<MasterCand> pool;
+	for (int r = 0; r < table->rowCount(); ++r) {
+		auto* it = table->item(r, fileCol);
+		if (!it || it->checkState() != Qt::Checked) {
+			continue;
+		}
+		const QString path = it->data(Qt::UserRole).toString();
+		if (masterMarker &&
+		    QFileInfo(path).fileName().contains(masterMarker, Qt::CaseInsensitive)) {
+			continue;  // already a master file
+		}
+		if (!cache.contains(path)) {
+			continue;
+		}
+		pool.push_back({path, cache.value(path)});
+	}
+	return pool;
+}
+
+}  // namespace
+
+void StackWindow::replaceDarksByMaster() {
+	auto pool = checked_raws(_darkTable, kMFile, _masterMeta, "master_dark");
+	if (pool.empty()) {
+		QMessageBox::information(this, tr("Master dark"),
+			tr("Check-mark one or more raw dark frames to combine."));
+		return;
+	}
+
+	const bool byExp  = _classDarkExp  && _classDarkExp->isChecked();
+	const bool byTemp = _classDarkTemp && _classDarkTemp->isChecked();
+	const bool byGain = _classDarkGain && _classDarkGain->isChecked();
+	const bool byDate = _classDarkDate && _classDarkDate->isChecked();
+	const int  deltaT = _deltaTemp ? _deltaTemp->value() : 3;
+
+	std::vector<QString> consumed;
+	std::vector<QString> created;
+
+	// Peel off successive groups matching the first remaining frame's spec, one
+	// master per group (Pascal replace_by_master_dark repeat-until loop). Working on
+	// a snapshot vector (not the live table) keeps a failed create from re-matching
+	// the same rows forever.
+	while (!pool.empty()) {
+		const astap::stacking::MasterMetadata spec = pool.front().m;
+		std::vector<MasterCand> group;
+		std::vector<MasterCand> remain;
+		for (const auto& cand : pool) {
+			const astap::stacking::MasterMetadata& m = cand.m;
+			bool match = (m.width == spec.width);   // width always
+			if (match && byExp)  { match = (m.exposure == spec.exposure); }
+			if (match && byTemp) { match = (std::abs(m.set_temperature - spec.set_temperature) <= deltaT); }
+			if (match && byGain) { match = (m.gain == spec.gain); }
+			if (match && byDate) { match = (std::abs(m.jd - spec.jd) <= 0.5); }
+			if (match) { group.push_back(cand); }
+			else       { remain.push_back(cand); }
+		}
+		pool.swap(remain);
+		if (group.empty()) {
+			break;   // the spec always matches itself, so this is unreachable
+		}
+
+		std::vector<std::filesystem::path> frames;
+		frames.reserve(group.size());
+		for (const auto& c : group) {
+			frames.emplace_back(c.path.toStdString());
+		}
+
+		const std::filesystem::path folder =
+			std::filesystem::path(group.front().path.toStdString()).parent_path();
+		const int tempAvg = average_set_temperature(group);
+		const QString name = QString("master_dark_%1x%2s_at_%3C_%4.fit")
+			.arg(static_cast<int>(group.size()))
+			.arg(spec.exposure)
+			.arg(tempAvg)
+			.arg(QString::fromStdString(spec.date_obs).left(10));
+		const std::filesystem::path out = folder / name.toStdString();
+
+		const auto res = astap::stacking::create_master(
+			frames, astap::stacking::MasterKind::Dark, out);
+		if (!res.ok) {
+			QMessageBox::warning(this, tr("Master dark"),
+				tr("Could not create %1: %2")
+					.arg(name, QString::fromStdString(res.message)));
+			continue;   // group already removed from pool → no infinite loop
+		}
+		for (const auto& c : group) {
+			consumed.push_back(c.path);
+		}
+		created.push_back(QString::fromStdString(out.string()));
+	}
+
+	replaceRows(_darkTable, consumed, created);
+	if (!created.empty()) {
+		const int nm = static_cast<int>(created.size());
+		_phaseLabel->setText(tr("Created %1 master dark%2 from %3 frames")
+			.arg(nm)
+			.arg(nm == 1 ? QString() : QStringLiteral("s"))
+			.arg(static_cast<int>(consumed.size())));
+		_phaseLabel->setVisible(true);
+	}
+}
+
+void StackWindow::replaceFlatsByMaster() {
+	// Gather check-marked raw flats, skipping master files and any flat that is
+	// already calibrated (non-empty CALSTAT) — Pascal replace_by_master_flat gate.
+	std::vector<MasterCand> pool;
+	for (auto& cand : checked_raws(_flatTable, kMFile, _masterMeta, "master_flat")) {
+		if (cand.m.calstat.empty()) {
+			pool.push_back(std::move(cand));
+		}
+	}
+	if (pool.empty()) {
+		QMessageBox::information(this, tr("Master flat"),
+			tr("Check-mark one or more uncalibrated raw flat frames to combine."));
+		return;
+	}
+
+	// Check-marked flat-darks available for subtraction (all of them; filtered per
+	// group below when classifying by exposure — Pascal average_flatdarks).
+	const auto flatDarks = checked_raws(_flatDarkTable, kMFile, _masterMeta, nullptr);
+
+	const bool byFilter   = _classFlatFilter   && _classFlatFilter->isChecked();
+	const bool byDuration = _classFlatDuration && _classFlatDuration->isChecked();
+	const bool byDate     = _classFlatDate     && _classFlatDate->isChecked();
+
+	std::vector<QString> consumed;
+	std::vector<QString> created;
+	bool flatDarkUsed = false;
+
+	while (!pool.empty()) {
+		const astap::stacking::MasterMetadata spec = pool.front().m;
+		const QString specExp = format_exposure(spec.exposure_seconds);
+		std::vector<MasterCand> group;
+		std::vector<MasterCand> remain;
+		for (const auto& cand : pool) {
+			const astap::stacking::MasterMetadata& m = cand.m;
+			bool match = (m.width == spec.width) && (m.height == spec.height);  // dims always
+			if (match && byFilter)   { match = (m.filter_name == spec.filter_name); }
+			if (match && byDuration) { match = (format_exposure(m.exposure_seconds) == specExp); }
+			if (match && byDate)     { match = (std::abs(m.jd - spec.jd) <= 0.5); }
+			if (match) { group.push_back(cand); }
+			else       { remain.push_back(cand); }
+		}
+		pool.swap(remain);
+		if (group.empty()) {
+			break;
+		}
+
+		// Flat-darks paired with this group: when classifying by duration, only
+		// those whose exposure matches; otherwise every check-marked flat-dark.
+		std::vector<std::filesystem::path> fdFrames;
+		for (const auto& fd : flatDarks) {
+			if (byDuration && format_exposure(fd.m.exposure_seconds) != specExp) {
+				continue;
+			}
+			fdFrames.emplace_back(fd.path.toStdString());
+		}
+
+		std::vector<std::filesystem::path> frames;
+		frames.reserve(group.size());
+		for (const auto& c : group) {
+			frames.emplace_back(c.path.toStdString());
+		}
+
+		const std::filesystem::path folder =
+			std::filesystem::path(group.front().path.toStdString()).parent_path();
+		const QString filter = sanitize_filter(spec.filter_name);
+		const QString name =
+			QString("master_flat_corrected_with_flat_darks_%1_%2xF_%3xFD_%4sec_%5.fit")
+				.arg(filter)
+				.arg(static_cast<int>(group.size()))
+				.arg(static_cast<int>(fdFrames.size()))
+				.arg(specExp)
+				.arg(QString::fromStdString(spec.date_obs).left(10));
+		const std::filesystem::path out = folder / name.toStdString();
+
+		const auto res = astap::stacking::create_master(
+			frames, astap::stacking::MasterKind::Flat, out, fdFrames);
+		if (!res.ok) {
+			QMessageBox::warning(this, tr("Master flat"),
+				tr("Could not create %1: %2")
+					.arg(name, QString::fromStdString(res.message)));
+			continue;
+		}
+		if (res.flatdarks_combined > 0) {
+			flatDarkUsed = true;
+		}
+		for (const auto& c : group) {
+			consumed.push_back(c.path);
+		}
+		created.push_back(QString::fromStdString(out.string()));
+	}
+
+	replaceRows(_flatTable, consumed, created);
+	if (!created.empty()) {
+		const int nm = static_cast<int>(created.size());
+		_phaseLabel->setText(tr("Created %1 master flat%2 from %3 frames")
+			.arg(nm)
+			.arg(nm == 1 ? QString() : QStringLiteral("s"))
+			.arg(static_cast<int>(consumed.size())));
+		_phaseLabel->setVisible(true);
+	}
+
+	// Pascal clears the flat-darks list once any were consumed into a master.
+	if (flatDarkUsed) {
+		_flatDarkTable->setRowCount(0);
+	}
+}
+
+// Remove the @p consumed raw rows from @p table and append the @p created master
+// rows in their place, preserving the table's sort state.
+void StackWindow::replaceRows(QTableWidget* table,
+		const std::vector<QString>& consumed,
+		const std::vector<QString>& created) {
+	if (consumed.empty() && created.empty()) {
+		return;
+	}
+	const bool wasSorting = table->isSortingEnabled();
+	table->setSortingEnabled(false);
+	const QSet<QString> gone(consumed.begin(), consumed.end());
+	for (int r = table->rowCount() - 1; r >= 0; --r) {
+		auto* it = table->item(r, kMFile);
+		if (it && gone.contains(it->data(Qt::UserRole).toString())) {
+			table->removeRow(r);
+		}
+	}
+	for (const auto& p : created) {
+		insertMasterRow(table, p);
+	}
+	table->setSortingEnabled(wasSorting);
+	refreshCompatibility();
+}
+
+void StackWindow::addDarkFiles()     { addMasterFiles(_darkTable, tr("dark")); }
+void StackWindow::addFlatFiles()     { addMasterFiles(_flatTable, tr("flat")); }
+void StackWindow::addFlatDarkFiles() { addMasterFiles(_flatDarkTable, tr("flat dark")); }
+void StackWindow::removeDarks()      { removeSelectedRows(_darkTable); }
+void StackWindow::removeFlats()      { removeSelectedRows(_flatTable); }
+void StackWindow::removeFlatDarks()  { removeSelectedRows(_flatDarkTable); }
+void StackWindow::clearDarks()       { _darkTable->setRowCount(0); refreshCompatibility(); }
+void StackWindow::clearFlats()       { _flatTable->setRowCount(0); refreshCompatibility(); }
+void StackWindow::clearFlatDarks()   { _flatDarkTable->setRowCount(0); }
 
 void StackWindow::buildLightsTab() {
 	auto* page = new QWidget(_tabs);
@@ -404,7 +705,8 @@ void StackWindow::buildDarksTab() {
 	auto* page = new QWidget(_tabs);
 	auto* layout = new QVBoxLayout(page);
 	_darkTable = make_master_table(page);
-	_darkTable->setColumnHidden(kMFilter, true);  // darks have no filter (Pascal listview2)
+	_darkTable->setColumnHidden(kMFilter, true);   // darks have no filter (Pascal listview2)
+	_darkTable->setColumnHidden(kMCalstat, true);  // …nor a calibration status
 	layout->addWidget(_darkTable, 1);
 
 	auto* row = new QHBoxLayout();
@@ -417,9 +719,22 @@ void StackWindow::buildDarksTab() {
 	row->addStretch(1);
 	layout->addLayout(row);
 
+	// Master-creation row (Pascal replace_by_master_dark1 + classify_dark_date1).
+	auto* makeRow = new QHBoxLayout();
+	auto* replace = new QPushButton(tr("Replace check-marked by one or more master dark"), page);
+	replace->setToolTip(tr("Combine the check-marked raw darks into one or more master "
+	                       "darks and swap them into this list."));
+	_classDarkDate = new QCheckBox(tr("Classify by date for master creation"), page);
+	_classDarkDate->setToolTip(tr("Group frames taken within 12 hours into separate masters."));
+	makeRow->addWidget(replace);
+	makeRow->addWidget(_classDarkDate);
+	makeRow->addStretch(1);
+	layout->addLayout(makeRow);
+
 	connect(add, &QPushButton::clicked, this, &StackWindow::addDarkFiles);
 	connect(rem, &QPushButton::clicked, this, &StackWindow::removeDarks);
 	connect(clr, &QPushButton::clicked, this, &StackWindow::clearDarks);
+	connect(replace, &QPushButton::clicked, this, &StackWindow::replaceDarksByMaster);
 
 	_tabs->addTab(page, tr("Darks"));
 }
@@ -440,11 +755,70 @@ void StackWindow::buildFlatsTab() {
 	row->addStretch(1);
 	layout->addLayout(row);
 
+	// Master-creation row (Pascal replace_by_master_flat1 + classify_flat_duration1 /
+	// classify_flat_date1). The check-marked frames on the Flat darks tab are averaged
+	// and subtracted per the formula below.
+	auto* makeRow = new QHBoxLayout();
+	auto* replace = new QPushButton(
+		tr("Replace check-marked by master flat (flat darks included)"), page);
+	replace->setToolTip(tr("Combine the check-marked raw flats into one or more master "
+	                       "flats, subtracting the check-marked flat darks."));
+	_classFlatDuration =
+		new QCheckBox(tr("Classify by exposure duration for master creation"), page);
+	_classFlatDuration->setToolTip(
+		tr("Group flats (and flat darks) by exposure duration into separate masters."));
+	_classFlatDate = new QCheckBox(tr("Classify by date for master creation"), page);
+	_classFlatDate->setToolTip(tr("Group flats taken within 12 hours into separate masters."));
+	makeRow->addWidget(replace);
+	// Stack the two flat classify checkboxes vertically so the long button + both
+	// captions do not fight for width in the 520-px window.
+	auto* flatClassifyCol = new QVBoxLayout();
+	flatClassifyCol->addWidget(_classFlatDuration);
+	flatClassifyCol->addWidget(_classFlatDate);
+	makeRow->addLayout(flatClassifyCol);
+	makeRow->addStretch(1);
+	layout->addLayout(makeRow);
+
+	// Pascal formula label (unit_stack.lfm: 'Master flat := (1/n ∑ [flats] - 1/n ∑ [flat darks])').
+	auto* formula = new QLabel(
+		tr("Master flat  :=  (1/n ∑ [flats]  −  1/n ∑ [flat darks])"), page);
+	formula->setStyleSheet("color: gray;");
+	layout->addWidget(formula);
+
 	connect(add, &QPushButton::clicked, this, &StackWindow::addFlatFiles);
 	connect(rem, &QPushButton::clicked, this, &StackWindow::removeFlats);
 	connect(clr, &QPushButton::clicked, this, &StackWindow::clearFlats);
+	connect(replace, &QPushButton::clicked, this, &StackWindow::replaceFlatsByMaster);
 
 	_tabs->addTab(page, tr("Flats"));
+}
+
+void StackWindow::buildFlatDarksTab() {
+	auto* page = new QWidget(_tabs);
+	auto* layout = new QVBoxLayout(page);
+	_flatDarkTable = make_master_table(page);
+	// Raw flat-dark/bias frames only — no filter, no calibration status, and they
+	// are never matched against a light so no compatibility column either.
+	_flatDarkTable->setColumnHidden(kMFilter, true);
+	_flatDarkTable->setColumnHidden(kMCalstat, true);
+	_flatDarkTable->setColumnHidden(kMCompat, true);
+	layout->addWidget(_flatDarkTable, 1);
+
+	auto* row = new QHBoxLayout();
+	auto* add = new QPushButton(tr("Add…"), page);
+	auto* rem = new QPushButton(tr("Remove"), page);
+	auto* clr = new QPushButton(tr("Clear"), page);
+	row->addWidget(add);
+	row->addWidget(rem);
+	row->addWidget(clr);
+	row->addStretch(1);
+	layout->addLayout(row);
+
+	connect(add, &QPushButton::clicked, this, &StackWindow::addFlatDarkFiles);
+	connect(rem, &QPushButton::clicked, this, &StackWindow::removeFlatDarks);
+	connect(clr, &QPushButton::clicked, this, &StackWindow::clearFlatDarks);
+
+	_tabs->addTab(page, tr("Flat darks"));
 }
 
 QWidget* StackWindow::buildClassifyBar() {

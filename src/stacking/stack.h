@@ -123,7 +123,9 @@ void set_flat_library(std::span<const std::filesystem::path> masters);
 
 struct MasterMetadata {
     std::filesystem::path path;
-    int         exposure = 0;        // round(head.exposure)
+    int         exposure = 0;        // round(head.exposure) — dark grouping/display
+    double      exposure_seconds = 0.0;  // raw head.exposure — flats key off the
+                                         // fractional value (sub-10 s), like the Pascal
     int         set_temperature = 0;
     std::string gain;                // egain if present, else gain
     double      xbinning = 0.0;

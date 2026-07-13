@@ -935,6 +935,7 @@ bool analyse_master(const std::filesystem::path& path, MasterMetadata& out) {
     }
     out.path            = path;
     out.exposure        = static_cast<int>(std::lrint(head.exposure));
+    out.exposure_seconds = head.exposure;
     out.set_temperature = head.set_temperature;
     out.gain            = head.egain.empty() ? head.gain : head.egain;
     out.xbinning        = head.xbinning;
