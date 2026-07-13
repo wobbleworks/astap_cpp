@@ -161,6 +161,9 @@ struct Args {
     std::optional<std::string> stack_path;
     std::optional<std::string> master_dark;   // -stackfiles master dark
     std::optional<std::string> master_flat;   // -stackfiles master flat
+    bool                       comet = false; // -stackfiles ephemeris comet track
+    std::optional<std::string> cometpos;      // -comet "JD RA Dec" (deg)
+    std::optional<std::string> cometdrift;    // -comet "dRAcosDec dDec" (arcsec/hr)
     std::optional<double>      outlier_sigma; // -sd: quality-outlier rejection
     std::vector<std::string>   flatdark_files; // -flatdark (repeatable): master-flat bias
     std::optional<std::string> darklib;       // -darklib <dir>: candidate dark library
@@ -300,6 +303,9 @@ Args parse_args(int argc, char* argv[]) {
         if (take_flag(arg, "stackfiles")) { out.stackfiles = true; continue; }
         if (take_flag(arg, "sigmaclip"))  { out.sigmaclip = true; continue; }
         if (take_flag(arg, "mosaic"))     { out.mosaic = true; continue; }
+        if (take_flag(arg, "comet"))      { out.comet = true; continue; }
+        if (try_value("cometpos",   [&](auto v){ out.cometpos   = v; }))                 continue;
+        if (try_value("cometdrift", [&](auto v){ out.cometdrift = v; }))                 continue;
         if (take_flag(arg, "makedark"))   { out.makedark = true; continue; }
         if (take_flag(arg, "makeflat"))   { out.makeflat = true; continue; }
         if (take_flag(arg, "makebias"))   { out.makebias = true; continue; }
@@ -849,6 +855,63 @@ int main(int argc, char* argv[]) {
 
         std::vector<std::filesystem::path> frames(a.positional.begin(),
                                                   a.positional.end());
+
+        // -comet: ephemeris-tracked comet stack. Needs -cometpos "JD RA Dec"
+        // (RA/Dec in degrees at the reference JD); -cometdrift "dRAcosDec dDec"
+        // (on-sky arcsec/hour, JPL Horizons convention) is optional and defaults
+        // to a stationary target. Dispatches combine_comet, not stack_files.
+        if (a.comet) {
+            constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
+            auto parse_floats = [](const std::string& s) {
+                std::vector<double> v;
+                std::string tok;
+                const auto flush = [&]() {
+                    if (!tok.empty()) { v.push_back(std::strtod(tok.c_str(), nullptr)); tok.clear(); }
+                };
+                for (const char ch : s) {
+                    if (ch == ',' || ch == ' ' || ch == '\t') { flush(); }
+                    else { tok.push_back(ch); }
+                }
+                flush();
+                return v;
+            };
+            if (!a.cometpos) {
+                std::cerr << "astap: -comet requires -cometpos \"JD RA Dec\" "
+                             "(RA/Dec in degrees)\n";
+                return 2;
+            }
+            const auto pos = parse_floats(*a.cometpos);
+            if (pos.size() != 3) {
+                std::cerr << "astap: -cometpos expects 3 values \"JD RA Dec\"; got "
+                          << pos.size() << '\n';
+                return 2;
+            }
+            astap::stacking::CometEphemeris ephem;
+            ephem.jd_ref = pos[0];
+            ephem.ra     = pos[1] * kDeg2Rad;
+            ephem.dec    = pos[2] * kDeg2Rad;
+            if (a.cometdrift) {
+                const auto d = parse_floats(*a.cometdrift);
+                if (d.size() != 2) {
+                    std::cerr << "astap: -cometdrift expects 2 values "
+                                 "\"dRAcosDec dDec\" (arcsec/hr); got " << d.size() << '\n';
+                    return 2;
+                }
+                ephem.drift_ra  = d[0];
+                ephem.drift_dec = d[1];
+            }
+            std::filesystem::path cout_path = a.output ? std::filesystem::path{*a.output}
+                                                       : std::filesystem::path{"comet.fits"};
+            const auto res = astap::stacking::combine_comet(frames, ephem, cout_path);
+            std::cout << std::format(
+                "COMET={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_COMBINED={}\n"
+                "REFERENCE={}\nOUTPUT={}\n",
+                res.ok ? 1 : 0, res.frames_input, res.frames_solved,
+                res.frames_combined, res.reference.string(), res.output.string());
+            if (!res.ok) { std::cerr << "astap: comet stack failed: " << res.message << '\n'; }
+            return res.ok ? 0 : 1;
+        }
+
         const auto method = a.sigmaclip ? astap::stacking::StackMethod::SigmaClip
                           : a.mosaic    ? astap::stacking::StackMethod::Mosaic
                                         : astap::stacking::StackMethod::Average;

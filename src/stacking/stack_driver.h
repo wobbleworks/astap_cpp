@@ -25,7 +25,7 @@ namespace astap::stacking {
 ///----------------------------------------
 
 /// @brief Frame-combination method.
-enum class StackMethod { Average, SigmaClip, Mosaic };
+enum class StackMethod { Average, SigmaClip, Mosaic, Comet };
 
 ///----------------------------------------
 ///  @brief Outcome of a batch stack.
@@ -217,5 +217,58 @@ struct LrgbResult {
 
 [[nodiscard]] LrgbResult combine_lrgb(const LrgbInputs& inputs,
                                       const std::filesystem::path& output);
+
+///----------------------------------------
+///  @brief Comet ephemeris for a comet-tracked stack.
+///  @details The comet's sky position at @c jd_ref plus a linear drift. The
+///           driver evaluates it at each frame's mid-exposure JD and projects it
+///           through that frame's WCS to the frame's comet pixel. Drift follows
+///           the JPL Horizons convention: @c drift_ra is the on-sky rate
+///           @c dRA·cos(Dec), so the coordinate RA rate is @c drift_ra/cos(Dec).
+///----------------------------------------
+
+struct CometEphemeris {
+    double jd_ref = 0.0;      ///< Reference Julian Date for @c ra / @c dec.
+    double ra = 0.0;          ///< Comet RA at @c jd_ref, radians.
+    double dec = 0.0;         ///< Comet Dec at @c jd_ref, radians.
+    double drift_ra = 0.0;    ///< On-sky RA drift dRA·cos(Dec), arcsec/hour.
+    double drift_dec = 0.0;   ///< Dec drift, arcsec/hour.
+};
+
+///----------------------------------------
+///  @brief Outcome of a comet-tracked stack.
+///----------------------------------------
+
+struct CometResult {
+    bool                  ok = false;
+    int                   frames_input = 0;
+    int                   frames_solved = 0;
+    int                   frames_combined = 0;
+    std::filesystem::path reference;
+    std::filesystem::path output;
+    std::string           message;
+};
+
+///----------------------------------------
+///  @brief Stack frames tracked on a moving comet (ephemeris alignment).
+///  @details Pre-solves every frame (persisting the WCS and dropping any that
+///           will not solve), then for each frame evaluates @p ephem at the
+///           frame's mid-exposure JD and projects that sky position through the
+///           frame's WCS to obtain the comet's pixel there. Those per-frame comet
+///           positions drive @c stack_comet's ephemeris alignment, which registers
+///           the frames on the comet while suppressing the drifting stars (kept
+///           only from the first frame). Writes a mono 32-bit-float FITS with the
+///           stacked-header keyword block (HISTORY = COMET). Ports the
+///           internal-astrometry + ephemeris path of @c stack_comet (`unit_stack_
+///           routines.pas:1628`).
+///  @param frames Light-frame paths (need a WCS or must be solvable).
+///  @param ephem  Comet position + drift.
+///  @param output Destination path for the stacked FITS.
+///  @return Result with frame counts and an @c ok flag.
+///----------------------------------------
+
+[[nodiscard]] CometResult combine_comet(std::span<const std::filesystem::path> frames,
+                                        const CometEphemeris& ephem,
+                                        const std::filesystem::path& output);
 
 } // namespace

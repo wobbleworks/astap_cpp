@@ -57,6 +57,13 @@ struct Background {
 struct FileToDo {
     std::string name;
     int listview_index{};
+    // Comet / manual alignment inputs. In the GUI these come from the listview
+    // (marked comet position + measured HFD); headless callers set them directly
+    // so calculate_manual_vector / stack_comet need no front-end. comet_x/comet_y
+    // are the comet's 1-based pixel position in this frame.
+    double comet_x{};
+    double comet_y{};
+    double hfd{};
 };
 
 // FITS-style header metadata. Mirrors Pascal Theader from astap_main.pas

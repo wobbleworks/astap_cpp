@@ -130,6 +130,23 @@ struct Staged { fs::path dir; std::string frame_args; std::vector<fs::path> file
 	return s;
 }
 
+/// @brief Rewrite a frame's DATE-OBS hour in place (the corpus frames all share
+///        2000-01-01T12:00:00 = JD 2451545.0). Staggering the times gives the
+///        comet drift term a differential effect across frames.
+[[nodiscard]] static bool set_date_obs_hour(const fs::path& file, int hour) {
+	std::ifstream in(file, std::ios::binary);
+	std::string data((std::istreambuf_iterator<char>(in)),
+	                 std::istreambuf_iterator<char>());
+	in.close();
+	const auto p = data.find("2000-01-01T12:00:00");
+	if (p == std::string::npos) return false;   // corpus date format changed — caller REQUIREs
+	data[p + 11] = static_cast<char>('0' + hour / 10);   // hour tens  (index of "1")
+	data[p + 12] = static_cast<char>('0' + hour % 10);   // hour units (index of "2")
+	std::ofstream out(file, std::ios::binary | std::ios::trunc);
+	out.write(data.data(), static_cast<std::streamsize>(data.size()));
+	return true;
+}
+
 /// @brief Median of one plane of a 32-bit-float FITS, or NaN if unreadable.
 /// @details Minimal reader for the stacker's own output (BITPIX -32, big-endian,
 ///          BZERO 0 / BSCALE 1): scans 2880-byte header blocks to END, then reads
@@ -603,6 +620,97 @@ TEST_CASE("LRGB colour-mix matrix routes the input channels to chosen output pla
 		CHECK(plane_median(outW, 1) == doctest::Approx(id1));
 		CHECK(plane_median(outW, 2) == doctest::Approx(id2));
 	}
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("comet stack tracks the ephemeris and aligns on the moving target") {
+	if (!assets_available()) return;
+	auto s = stage_m31("comet");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+	// Stagger the frame times 12h / 13h / 14h so the comet drift has a differential
+	// effect (the corpus frames otherwise share one timestamp). REQUIRE the patch so a
+	// future corpus date-format change fails loudly instead of collapsing the premise.
+	for (int i = 0; i < static_cast<int>(s.files.size()); ++i) {
+		REQUIRE(set_date_obs_hour(s.files[i], 12 + i));
+	}
+
+	const std::string db = " -d " + q(kDbDir.string());
+	// Comet at M31's field centre (~RA 10.68°, Dec 41.27°) at the frame-a JD
+	// (2000-01-01T12:00 = 2451545.0).
+	const std::string pos = " -cometpos \"2451545.0 10.68 41.27\"";
+
+	// --- Stationary comet: frames register on the fixed point → solves to M31 ---
+	const auto outS = s.dir / "comet_static.fits";
+	const auto st = run(q(kPortBin) + " -stackfiles -comet" + pos
+	                    + " -o " + q(outS.string()) + db + s.frame_args);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "COMET=") == "1");
+	CHECK(field(st.out, "FRAMES_SOLVED=") == "3");
+	CHECK(field(st.out, "FRAMES_COMBINED=") == "3");
+	REQUIRE(fs::exists(outS));
+	{
+		std::ifstream ifs(outS, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("Stacking method COMET") != std::string::npos);
+		CHECK(hdr.find("CALSTAT = 'S")          != std::string::npos);  // stacked
+	}
+	const auto base = s.dir / "comet_solve";
+	const auto sv = run(q(kPortBin) + " -f " + q(outS.string()) + db
+	                    + " -o " + q(base.string()));
+	auto ini = base; ini.replace_extension(".ini");
+	REQUIRE(fs::exists(ini));
+	{
+		std::ifstream ifs(ini);
+		const std::string txt((std::istreambuf_iterator<char>(ifs)),
+		                      std::istreambuf_iterator<char>());
+		CHECK(txt.find("PLTSOLVD=T") != std::string::npos);
+	}
+	CHECK(ini_value(ini, "CRVAL1=") == doctest::Approx(10.7).epsilon(0.1));
+	CHECK(ini_value(ini, "CRVAL2=") == doctest::Approx(41.24).epsilon(0.1));
+	CHECK(selected_stars(sv.out) > 300);   // stars stay point-like when tracked right
+
+	// --- Large drift: the per-frame comet position moves with JD, so each frame
+	//     is shifted by the comet's motion and the stacked result differs from the
+	//     stationary one. Proves the drift term is applied differentially. --------
+	const auto outD = s.dir / "comet_drift.fits";
+	const auto dr = run(q(kPortBin) + " -stackfiles -comet" + pos
+	                    + " -cometdrift \"3600 3600\""   // ~1°/hr on sky
+	                    + " -o " + q(outD.string()) + db + s.frame_args);
+	CHECK(dr.exit_code == 0);
+	CHECK(field(dr.out, "COMET=") == "1");
+	// Pin the counts too, so a dropped/errored frame can't pass by merely moving the
+	// median (the false-pass hole in a bare median-differs check).
+	CHECK(field(dr.out, "FRAMES_SOLVED=")    == "3");
+	CHECK(field(dr.out, "FRAMES_COMBINED=")  == "3");
+	REQUIRE(fs::exists(outD));
+	const double ms = plane_median(outS, 0);
+	const double md = plane_median(outD, 0);
+	REQUIRE(std::isfinite(ms));
+	REQUIRE(std::isfinite(md));
+	CHECK(ms != doctest::Approx(md));   // drift visibly changed the registration
+
+	// --- Zero-drift invariant: an explicit "0 0" drift must reproduce the stationary
+	//     stack (a spurious offset applied even at zero drift would break this). Note:
+	//     plane_median is arrangement-invariant, so it cannot discriminate RA-vs-Dec
+	//     drift DIRECTION (both combine the same three frames, only shifted) — only the
+	//     content total, which is equal here. Directional/cos(Dec) correctness is not
+	//     CLI-median-observable; the stationary solve pins the projection's consistency.
+	const auto outZ = s.dir / "comet_zero.fits";
+	const auto zr = run(q(kPortBin) + " -stackfiles -comet" + pos
+	                    + " -cometdrift \"0 0\" -o " + q(outZ.string()) + db + s.frame_args);
+	CHECK(zr.exit_code == 0);
+	REQUIRE(fs::exists(outZ));
+	CHECK(plane_median(outZ, 0) == doctest::Approx(ms));   // explicit zero == stationary
+
+	// --- Arg guard: a wrong-count -cometdrift is a fatal parse error (exit 2), unlike
+	//     -colormix's silent identity fallback. No COMET= echo on that path. ---------
+	const auto bad = run(q(kPortBin) + " -stackfiles -comet" + pos
+	                     + " -cometdrift \"3600\" -o " + q((s.dir / "bad.fits").string())
+	                     + db + s.frame_args);
+	CHECK(bad.exit_code == 2);
+	CHECK(field(bad.out, "COMET=").empty());
 
 	fs::remove_all(s.dir);
 }

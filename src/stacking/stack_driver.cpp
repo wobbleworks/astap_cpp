@@ -10,13 +10,15 @@
 
 #include <cmath>
 #include <format>
+#include <numbers>
 #include <string>
 #include <vector>
 
-#include "stack.h"            // update_solution_and_save, jd_to_date
-#include "stack_routines.h"   // stack_average, stack_sigmaclip, FileToDo
+#include "stack.h"            // update_solution_and_save, jd_to_date, date_to_jd
+#include "stack_routines.h"   // stack_average, stack_sigmaclip, stack_comet, FileToDo
 #include "../core/fits.h"     // load_fits, save_fits, header-edit helpers
 #include "../core/globals.h"  // head, img_loaded, memo1_lines, accumulators, flags
+#include "../core/wcs.h"      // celestial_to_pixel
 #include "../types.h"
 
 ///----------------------------------------
@@ -89,6 +91,7 @@ void write_stacked_header(StackMethod method, int counterL) {
     astap::core::update_text(memo, "HISTORY 1",
         method == StackMethod::SigmaClip ? "  Stacking method SIGMA CLIP AVERAGE"
       : method == StackMethod::Mosaic    ? "  Stacking method MOSAIC"
+      : method == StackMethod::Comet     ? "  Stacking method COMET"
                                          : "  Stacking method AVERAGE");
     astap::core::update_text(memo, "HISTORY 2", "  Processed as gray scale images.");
 
@@ -505,6 +508,10 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
             // the headless caller supplies pre-matched frames.
             stack_mosaic(process_as_osc, keep, /*max_dev_backgr=*/0.0, counter);
             break;
+        case StackMethod::Comet:
+            // Comet tracking needs an ephemeris; it is driven by combine_comet.
+            r.message = "comet stacking uses combine_comet, not stack_files";
+            return r;
     }
     r.frames_combined = counter;
     if (counter == 0) { r.message = "combiner produced no output"; return r; }
@@ -641,6 +648,108 @@ LrgbResult combine_lrgb(const LrgbInputs& inputs,
     }
 
     write_lrgb_header();
+    r.ok = astap::core::save_fits(astap::img_loaded, astap::memo1_lines,
+                                  output, /*type1=*/-32, /*override2=*/true);
+    r.output  = output;
+    r.message = r.ok ? "ok" : "save failed";
+    return r;
+}
+
+///----------------------------------------
+/// MARK: combine_comet
+///----------------------------------------
+
+CometResult combine_comet(std::span<const std::filesystem::path> frames,
+                          const CometEphemeris& ephem,
+                          const std::filesystem::path& output) {
+    CometResult r;
+    r.frames_input = static_cast<int>(frames.size());
+    if (frames.empty()) { r.message = "no input frames"; return r; }
+
+    // Drift is supplied on-sky in arcsec/hour (JPL Horizons dRA·cosDec / dDec);
+    // convert to radians/day and, for RA, back out the cos(Dec) to get the
+    // coordinate rate.
+    constexpr double kArcsecToRad = std::numbers::pi / (180.0 * 3600.0);
+    const double drift_ra_onsky  = ephem.drift_ra  * kArcsecToRad * 24.0;  // rad/day, on-sky
+    const double drift_dec_rate  = ephem.drift_dec * kArcsecToRad * 24.0;  // rad/day
+    const double cos_dec_ref = std::cos(ephem.dec);
+    const double drift_ra_rate = (std::abs(cos_dec_ref) > 1e-9)
+        ? drift_ra_onsky / cos_dec_ref : 0.0;                              // rad/day, in RA
+
+    // Pre-solve pass: solve each frame (persist WCS), measure its HFD, and project
+    // the comet's ephemeris position at the frame's mid-exposure JD through the
+    // frame's WCS to the comet's pixel there.
+    struct Cand { std::string name; double comet_x; double comet_y; double hfd; };
+    std::vector<Cand> cands;
+    cands.reserve(frames.size());
+    for (const auto& path : frames) {
+        if (!astap::core::load_fits(path, /*light=*/true, /*load_data=*/true,
+                                    /*update_memo=*/true, /*get_ext=*/0,
+                                    astap::memo1_lines, astap::head,
+                                    astap::img_loaded)) {
+            memo2_message("Skipping unreadable frame: " + path.string());
+            continue;
+        }
+        bool solved = astap::head.cd1_1 != 0.0;
+        if (!solved) {
+            solved = update_solution_and_save(astap::img_loaded, astap::head,
+                                              astap::memo1_lines, path);
+        }
+        if (!solved) {
+            memo2_message("Dropping unsolved frame: " + path.string());
+            continue;
+        }
+        int stars = 0;
+        double hfd_median = 0.0;
+        astap::Background bck{};
+        analyse_image(astap::img_loaded, astap::head, /*snr_min=*/30.0,
+                      /*report_type=*/0, stars, bck, hfd_median, nullptr);
+
+        // Comet sky position at this frame's mid-exposure JD. A frame whose
+        // DATE-OBS cannot be parsed (jd_mid == 0) would project the comet far
+        // off-canvas, so drop it rather than contribute garbage.
+        date_to_jd(astap::head.date_obs, astap::head.date_avg, astap::head.exposure);
+        if (astap::jd_mid == 0.0) {
+            memo2_message("Dropping frame with unusable DATE-OBS: " + path.string());
+            continue;
+        }
+        const double dt_days = astap::jd_mid - ephem.jd_ref;
+        const double ra_c  = ephem.ra  + drift_ra_rate  * dt_days;
+        const double dec_c = ephem.dec + drift_dec_rate * dt_days;
+        double cx = 0.0, cy = 0.0;
+        astap::core::celestial_to_pixel(astap::head, ra_c, dec_c, cx, cy);
+        cands.push_back({path.string(), cx, cy, hfd_median});
+    }
+    r.frames_solved = static_cast<int>(cands.size());
+    if (cands.empty()) { r.message = "no frame could be solved for alignment"; return r; }
+
+    // The first solved frame is the alignment reference (stack_comet sets
+    // referenceX/Y from its comet position). Input order is preserved so the
+    // reference is deterministic.
+    r.reference = cands.front().name;
+
+    std::vector<FileToDo> keep;
+    keep.reserve(cands.size());
+    for (const auto& c : cands) {
+        FileToDo f{c.name, -1};
+        f.comet_x = c.comet_x;
+        f.comet_y = c.comet_y;
+        f.hfd     = c.hfd;
+        keep.push_back(f);
+    }
+
+    // Ephemeris alignment: stack_comet registers on the comet, suppressing the
+    // drifting stars (kept only from the first frame).
+    astap::use_astrometry_internal = false;
+    astap::use_ephemeris_alignment = true;
+    astap::use_manual_align        = false;
+
+    int counter = 0;
+    stack_comet(/*process_as_osc=*/0, keep, counter);
+    r.frames_combined = counter;
+    if (counter == 0) { r.message = "combiner produced no output"; return r; }
+
+    write_stacked_header(StackMethod::Comet, counter);
     r.ok = astap::core::save_fits(astap::img_loaded, astap::memo1_lines,
                                   output, /*type1=*/-32, /*override2=*/true);
     r.output  = output;

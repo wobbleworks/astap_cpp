@@ -209,29 +209,25 @@ void calculate_manual_vector(std::span<FileToDo> files_to_process, int c) {
     auto shiftX = 0.0;
     auto shiftY = 0.0;
     
+    // Comet / asteroid pixel position in this frame. The GUI marks it in the
+    // listview; headless callers set FileToDo.comet_x/comet_y directly.
+    const double comet_x = files_to_process[c].comet_x;
+    const double comet_y = files_to_process[c].comet_y;
+
     if (head.cd1_1 == 0.0) {
         // Pure manual stacking.
         solution_vectorX[0] = 1.0;
         solution_vectorX[1] = 0.0;
-        solution_vectorX[2] = referenceX
-            - strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
+        solution_vectorX[2] = referenceX - comet_x;
         solution_vectorY[0] = 0.0;
         solution_vectorY[1] = 1.0;
-        solution_vectorY[2] = referenceY
-            - strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
+        solution_vectorY[2] = referenceY - comet_y;
     } else {
         sincos(head.dec0, SIN_dec0, COS_dec0);
         astrometric_to_vector();
-        
-        // Touch the list view items (mirrors original).
-        (void)listview_subitem(files_to_process[c].listview_index, L_X);
-        (void)listview_subitem(files_to_process[c].listview_index, L_Y);
-        
-        // Convert the asteroid position to RA / DEC.
-        pixel_to_celestial(head,
-            strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X)),
-            strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y)),
-            1, ra1, dec1);
+
+        // Convert the comet/asteroid position to RA / DEC via this frame's WCS.
+        pixel_to_celestial(head, comet_x, comet_y, 1, ra1, dec1);
             
         // Asteroid position in reference image pixels.
         celestial_to_pixel(head_ref, ra1, dec1, x1, y1);
@@ -626,8 +622,8 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
                 }
             } else if (!init) {
                 if (use_manual_align || use_ephemeris_alignment) {
-                    referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
-                    referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
+                    referenceX = files_to_process[c].comet_x;   // GUI listview → headless FileToDo
+                    referenceY = files_to_process[c].comet_y;
                 } else {
                     binning = report_binning(head.height);
                     bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
@@ -950,8 +946,8 @@ void stack_average(int process_as_osc,
                 clear_3d(img_temp,    1,           height_max, width_max);
                 
                 if (use_manual_align || use_ephemeris_alignment) {
-                    referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
-                    referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
+                    referenceX = files_to_process[c].comet_x;   // GUI listview → headless FileToDo
+                    referenceY = files_to_process[c].comet_y;
                 } else if (!use_astrometry_internal) {
                     bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
@@ -1600,8 +1596,8 @@ void stack_sigmaclip(int process_as_osc,
                 binning = report_binning(head.height);
                 if (!use_astrometry_internal) {
                     if (use_manual_align || use_ephemeris_alignment) {
-                        referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
-                        referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
+                        referenceX = files_to_process[c].comet_x;   // GUI listview → headless FileToDo
+                        referenceY = files_to_process[c].comet_y;
                     } else {
                         bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                            true, starlist1, warning);
@@ -2095,9 +2091,11 @@ void stack_comet(int process_as_osc,
             }
             
             if (!init) {
-                referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
-                referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
-                
+                // Reference comet position: the GUI marks it in the listview;
+                // headless callers set FileToDo.comet_x/comet_y.
+                referenceX = files_to_process[c].comet_x;
+                referenceY = files_to_process[c].comet_y;
+
                 height_max = head.height;
                 width_max  = head.width;
                 clear_3d(img_variance, 2, height_max, width_max);
@@ -2139,8 +2137,18 @@ void stack_comet(int process_as_osc,
                 if (counter == 1) {
                     JD_reference = jd_start;
                 } else if (counter == 2) {
-                    // Drift vs reference image.
-                    auto hfd_row = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_hfd));
+                    // Drift vs reference image. The per-frame HFD comes from the
+                    // GUI listview or, headless, from FileToDo.hfd. If it is missing,
+                    // re-measure it here (unit_stack_routines.pas:1791-1795).
+                    auto hfd_row = files_to_process[c].hfd;
+                    if (hfd_row <= 0.0) {
+                        auto stars_tmp = 0;
+                        auto hfd_med_tmp = 0.0;
+                        auto bck_tmp = Background{};
+                        analyse_image(img_loaded, head, 30.0, 0,
+                                      stars_tmp, bck_tmp, hfd_med_tmp, nullptr);
+                        hfd_row = hfd_med_tmp;
+                    }
                     delta_JD_required = std::abs(jd_start - JD_reference)
                         * 3.0 * hfd_row
                         / std::sqrt(sqr(solution_vectorX[2]) + sqr(solution_vectorY[2]));
@@ -2443,8 +2451,8 @@ void calibration_and_alignment(int process_as_osc,
             }
             if (!init && !use_astrometry_internal) {
                 if (use_manual_align || use_ephemeris_alignment) {
-                    referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
-                    referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
+                    referenceX = files_to_process[c].comet_x;   // GUI listview → headless FileToDo
+                    referenceY = files_to_process[c].comet_y;
                 } else {
                     bin_and_find_stars(img_loaded, binning, 1, hfd_min, astap::hfd_max_setting, max_stars,
                                        true, starlist1, warning);
@@ -2468,8 +2476,8 @@ void calibration_and_alignment(int process_as_osc,
                 clear_3d(img_average, head.naxis3, height_max, width_max);
                 clear_3d(img_temp,    head.naxis3, height_max, width_max);
                 if (use_manual_align || use_ephemeris_alignment) {
-                    referenceX = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_X));
-                    referenceY = strtofloat2(listview_subitem(files_to_process[c].listview_index, L_Y));
+                    referenceX = files_to_process[c].comet_x;   // GUI listview → headless FileToDo
+                    referenceY = files_to_process[c].comet_y;
                 }
             }
             

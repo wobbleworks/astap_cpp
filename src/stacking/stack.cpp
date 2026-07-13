@@ -328,7 +328,11 @@ void load_master_flat(int jd, Header& hd) {
 
 [[nodiscard]] int parse_int_range(std::string_view s, int start1, int len, bool& ok) {
     ok = false;
-    if (start1 < 1 || static_cast<int>(s.size()) < start1 - 1 + len) {
+    // Require only that the field STARTS within the string; substr clamps a field
+    // that runs past the end (Pascal `copy` semantics). This accepts the standard
+    // 19-char "YYYY-MM-DDThh:mm:ss" FITS date whose trailing field is shorter than
+    // the fixed-width read.
+    if (start1 < 1 || start1 - 1 >= static_cast<int>(s.size())) {
         return 0;
     }
     try {
@@ -351,7 +355,9 @@ void load_master_flat(int jd, Header& hd) {
 
 [[nodiscard]] double parse_double_range(std::string_view s, int start1, int len, bool& ok) {
     ok = false;
-    if (start1 < 1 || static_cast<int>(s.size()) < start1 - 1 + len) {
+    // Clamp a field that runs past the end rather than rejecting it (Pascal `copy`
+    // semantics) so a 19-char FITS date with a 2-char seconds field still parses.
+    if (start1 < 1 || start1 - 1 >= static_cast<int>(s.size())) {
         return 0.0;
     }
     try {
