@@ -131,10 +131,12 @@ struct Args {
     bool                       stack_mode = false;
     bool                       stackfiles = false;   // batch-stack explicit frames
     bool                       sigmaclip = false;     // sigma-clip combine (else average)
+    bool                       mosaic = false;        // mosaic (tile) combine
     bool                       makedark = false;      // create a master dark
     bool                       makeflat = false;      // create a master flat
     bool                       makebias = false;      // create a master bias
     bool                       lrgb = false;          // combine per-channel frames to colour
+    bool                       calibrate = false;     // calibrate+align only (no combine)
     std::optional<std::string> file;
     std::optional<double>      radius_deg;
     std::optional<double>      fov_deg;
@@ -156,6 +158,8 @@ struct Args {
     std::optional<std::string> stack_path;
     std::optional<std::string> master_dark;   // -stackfiles master dark
     std::optional<std::string> master_flat;   // -stackfiles master flat
+    std::optional<double>      outlier_sigma; // -sd: quality-outlier rejection
+    std::vector<std::string>   flatdark_files; // -flatdark (repeatable): master-flat bias
     std::optional<std::string> ch_red;        // -lrgb red channel
     std::optional<std::string> ch_green;      // -lrgb green channel
     std::optional<std::string> ch_blue;       // -lrgb blue channel
@@ -287,10 +291,12 @@ Args parse_args(int argc, char* argv[]) {
         if (take_flag(arg, "annotate")) { out.annotate = true; continue; }
         if (take_flag(arg, "stackfiles")) { out.stackfiles = true; continue; }
         if (take_flag(arg, "sigmaclip"))  { out.sigmaclip = true; continue; }
+        if (take_flag(arg, "mosaic"))     { out.mosaic = true; continue; }
         if (take_flag(arg, "makedark"))   { out.makedark = true; continue; }
         if (take_flag(arg, "makeflat"))   { out.makeflat = true; continue; }
         if (take_flag(arg, "makebias"))   { out.makebias = true; continue; }
         if (take_flag(arg, "lrgb"))       { out.lrgb = true; continue; }
+        if (take_flag(arg, "calibrate"))  { out.calibrate = true; continue; }
 
         // Optional-value options. -sip disables on 'n' (else enables); -check
         // enables *only* on 'y' (bare -check is off in the CLI oracle);
@@ -336,6 +342,11 @@ Args parse_args(int argc, char* argv[]) {
         if (try_value("stack",  [&](auto v){ out.stack_path   = v; out.stack_mode = true; })) continue;
         if (try_value("dark",   [&](auto v){ out.master_dark  = v; }))                   continue;
         if (try_value("flat",   [&](auto v){ out.master_flat  = v; }))                   continue;
+        if (try_value("sd",     [&](auto v){ out.outlier_sigma = parse_double(v); }))    continue;
+        // Repeatable: each -flatdark <file> adds one flat-dark for -makeflat.
+        if (auto v = take_value(av, i, "flatdark", next); v) {
+            out.flatdark_files.push_back(*v); continue;
+        }
         if (try_value("red",    [&](auto v){ out.ch_red       = v; }))                   continue;
         if (try_value("green",  [&](auto v){ out.ch_green     = v; }))                   continue;
         if (try_value("blue",   [&](auto v){ out.ch_blue      = v; }))                   continue;
@@ -740,9 +751,16 @@ int main(int argc, char* argv[]) {
                          : a.makebias ? "master_bias.fit" : "master_dark.fit";
         std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
                                              : std::filesystem::path{dflt};
-        const auto res = astap::stacking::create_master(frames, kind, out);
-        std::cout << std::format("MASTER={}\nFRAMES_IN={}\nFRAMES_COMBINED={}\nOUTPUT={}\n",
-            res.ok ? 1 : 0, res.frames_input, res.frames_combined, res.output.string());
+        std::vector<std::filesystem::path> fdarks(a.flatdark_files.begin(),
+                                                  a.flatdark_files.end());
+        const std::span<const std::filesystem::path> fdspan =
+            a.makeflat ? std::span<const std::filesystem::path>(fdarks)
+                       : std::span<const std::filesystem::path>{};
+        const auto res = astap::stacking::create_master(frames, kind, out, fdspan);
+        std::cout << std::format(
+            "MASTER={}\nFRAMES_IN={}\nFRAMES_COMBINED={}\nFLATDARKS_COMBINED={}\nOUTPUT={}\n",
+            res.ok ? 1 : 0, res.frames_input, res.frames_combined,
+            res.flatdarks_combined, res.output.string());
         if (!res.ok) { std::cerr << "astap: master creation failed: " << res.message << '\n'; }
         return res.ok ? 0 : 1;
     }
@@ -766,6 +784,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::filesystem::path> frames(a.positional.begin(),
                                                   a.positional.end());
         const auto method = a.sigmaclip ? astap::stacking::StackMethod::SigmaClip
+                          : a.mosaic    ? astap::stacking::StackMethod::Mosaic
                                         : astap::stacking::StackMethod::Average;
         std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
                                              : std::filesystem::path{"stack.fits"};
@@ -773,11 +792,12 @@ int main(int argc, char* argv[]) {
                                                     : std::filesystem::path{};
         std::filesystem::path mflat = a.master_flat ? std::filesystem::path{*a.master_flat}
                                                     : std::filesystem::path{};
-        const auto res = astap::stacking::stack_files(frames, method, out, mdark, mflat);
+        const double sigma = a.outlier_sigma.value_or(0.0);
+        const auto res = astap::stacking::stack_files(frames, method, out, mdark, mflat, sigma);
         std::cout << std::format(
-            "STACKED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_COMBINED={}\n"
+            "STACKED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_KEPT={}\nFRAMES_COMBINED={}\n"
             "REFERENCE={}\nOUTPUT={}\n",
-            res.ok ? 1 : 0, res.frames_input, res.frames_solved,
+            res.ok ? 1 : 0, res.frames_input, res.frames_solved, res.frames_kept,
             res.frames_combined, res.reference.string(), res.output.string());
         if (!res.ok) { std::cerr << "astap: stack failed: " << res.message << '\n'; }
         return res.ok ? 0 : 1;
@@ -815,6 +835,36 @@ int main(int argc, char* argv[]) {
             res.ok ? 1 : 0, res.channels_input, res.channels_combined,
             res.has_luminance ? 1 : 0, res.reference.string(), res.output.string());
         if (!res.ok) { std::cerr << "astap: LRGB combine failed: " << res.message << '\n'; }
+        return res.ok ? 0 : 1;
+    }
+
+    // 3a2) -calibrate: calibrate + align the positional frames WITHOUT combining
+    //      (stack methods 4 & 5) — writes one "<stem>_aligned.fit" per input.
+    //      Port superset; -o is ignored (outputs are named per input). -dark/-flat
+    //      apply calibration; -d/-D set the DB for the per-frame pre-solve.
+    if (a.calibrate) {
+        astap::commandline_execution = true;
+        if (a.database_path) {
+            std::filesystem::path p(*a.database_path);
+            if (!p.empty()
+                && p.native().back() != std::filesystem::path::preferred_separator) {
+                p /= "";
+            }
+            astap::reference::database_path = p;
+        }
+        if (a.database_name) { astap::reference::name_database = *a.database_name; }
+
+        std::vector<std::filesystem::path> frames(a.positional.begin(),
+                                                  a.positional.end());
+        std::filesystem::path mdark = a.master_dark ? std::filesystem::path{*a.master_dark}
+                                                    : std::filesystem::path{};
+        std::filesystem::path mflat = a.master_flat ? std::filesystem::path{*a.master_flat}
+                                                    : std::filesystem::path{};
+        const auto res = astap::stacking::calibrate_align_files(frames, mdark, mflat);
+        std::cout << std::format(
+            "CALIBRATED={}\nFRAMES_IN={}\nFRAMES_SOLVED={}\nFRAMES_ALIGNED={}\n",
+            res.ok ? 1 : 0, res.frames_input, res.frames_solved, res.frames_aligned);
+        if (!res.ok) { std::cerr << "astap: calibrate/align failed: " << res.message << '\n'; }
         return res.ok ? 0 : 1;
     }
 

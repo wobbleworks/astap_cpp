@@ -2576,25 +2576,39 @@ void calibration_and_alignment(int process_as_osc,
                 }
             }
             
-            // Save _aligned.fit. TODO: path manipulation.
+            // Rename to <stem>_aligned.fit.
             auto dot = filename2.find_last_of('.');
-            auto aligned = (dot == std::string::npos)
-                ? filename2 + "_aligned.fit"
-                : filename2.substr(0, dot) + "_aligned.fit";
-            filename2 = aligned;
-            
-            // TODO: FITS header edits (CRPIX1/2 correction, COMMENTs).
-            if (head.cd1_1 != 0.0) {
-                head.crpix1 = solution_vectorX[0] * (head.crpix1 - 1)
-                            + solution_vectorX[1] * (head.crpix2 - 1)
-                            + solution_vectorX[2];
-                head.crpix2 = solution_vectorY[0] * (head.crpix1 - 1)
-                            + solution_vectorY[1] * (head.crpix2 - 1)
-                            + solution_vectorY[2];
+            filename2 = (dot == std::string::npos ? filename2 : filename2.substr(0, dot))
+                      + "_aligned.fit";
+
+            // Every aligned frame lands on the reference grid, so it carries the
+            // reference solution verbatim (unit_stack_routines.pas:2161-2199). Write
+            // it into the header cards (the memo is what save_fits persists).
+            constexpr double kPi = 3.14159265358979323846;
+            auto& memo = astap::memo1_lines;
+            if (head_ref.cd1_1 != 0.0) {
+                astap::core::update_float(memo, "CRPIX1  =", " / X of reference pixel                           ", false, head_ref.crpix1);
+                astap::core::update_float(memo, "CRPIX2  =", " / Y of reference pixel                           ", false, head_ref.crpix2);
+                astap::core::update_float(memo, "CRVAL1  =", " / RA of reference pixel (deg)                    ", false, head_ref.ra0 * 180.0 / kPi);
+                astap::core::update_float(memo, "CRVAL2  =", " / DEC of reference pixel (deg)                   ", false, head_ref.dec0 * 180.0 / kPi);
+                astap::core::update_float(memo, "CD1_1   =", " / CD matrix to convert (x,y) to (Ra, Dec)        ", false, head_ref.cd1_1);
+                astap::core::update_float(memo, "CD1_2   =", " / CD matrix to convert (x,y) to (Ra, Dec)        ", false, head_ref.cd1_2);
+                astap::core::update_float(memo, "CD2_1   =", " / CD matrix to convert (x,y) to (Ra, Dec)        ", false, head_ref.cd2_1);
+                astap::core::update_float(memo, "CD2_2   =", " / CD matrix to convert (x,y) to (Ra, Dec)        ", false, head_ref.cd2_2);
+                if (head_ref.crota1 != 0.0) {
+                    astap::core::update_float(memo, "CROTA1  =", " / Image twist X axis (deg)                       ", false, head_ref.crota1);
+                    astap::core::update_float(memo, "CROTA2  =", " / Image twist Y axis (deg) E of N if not flipped.", false, head_ref.crota2);
+                    astap::core::update_float(memo, "CDELT1  =", " / X pixel size (deg)                             ", false, head_ref.cdelt1);
+                    astap::core::update_float(memo, "CDELT2  =", " / Y pixel size (deg)                             ", false, head_ref.cdelt2);
+                }
             }
-            
-            // TODO: update header comment / pedestal / counters.
-            
+            astap::core::update_text(memo, "COMMENT 1", "  Calibrated & aligned by ASTAP. www.hnsky.org");
+            astap::core::update_integer(memo, "PEDESTAL=", " / Value added during calibration or stacking     ", static_cast<int>(std::lround(head.pedestal)));
+            astap::core::update_text(memo, "CALSTAT =", "'" + head.calstat + "'");
+            astap::core::update_integer(memo, "DARK_CNT=", " / Darks used for luminance.               ", head.dark_count);
+            astap::core::update_integer(memo, "FLAT_CNT=", " / Flats used for luminance.               ", head.flat_count);
+            astap::core::update_integer(memo, "BIAS_CNT=", " / Flat-darks used for luminance.          ", head.flatdark_count);
+
             if (nrbits == 16) {
                 if (!save_fits(img_loaded, astap::memo1_lines, filename2, 16, true)) {
                     return;

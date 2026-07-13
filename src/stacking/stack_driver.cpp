@@ -88,6 +88,7 @@ void write_stacked_header(StackMethod method, int counterL) {
 
     astap::core::update_text(memo, "HISTORY 1",
         method == StackMethod::SigmaClip ? "  Stacking method SIGMA CLIP AVERAGE"
+      : method == StackMethod::Mosaic    ? "  Stacking method MOSAIC"
                                          : "  Stacking method AVERAGE");
     astap::core::update_text(memo, "HISTORY 2", "  Processed as gray scale images.");
 
@@ -259,66 +260,13 @@ void write_lrgb_header() {
         "  Total blue exposure " + std::to_string(std::lround(static_cast<double>(astap::counterB) * astap::exposureB)));
 }
 
-} // namespace
-
 ///----------------------------------------
-/// MARK: create_master
-///----------------------------------------
-
-MasterResult create_master(std::span<const std::filesystem::path> frames,
-                           MasterKind kind,
-                           const std::filesystem::path& output) {
-    MasterResult r;
-    r.frames_input = static_cast<int>(frames.size());
-    if (frames.empty()) { r.message = "no input frames"; return r; }
-
-    ImageArray img;
-    double temperature_avg = 0.0;
-    const int count = average_frames(frames, img, temperature_avg);
-    r.frames_combined = count;
-    if (count == 0) { r.message = "no frame could be averaged"; return r; }
-
-    // The averaged master is mono; the header carried the last frame's cards.
-    auto& memo = astap::memo1_lines;
-    auto& head = astap::head;
-    head.naxis  = 2;
-    head.naxis3 = 1;
-
-    const std::string_view count_key =
-        kind == MasterKind::Dark ? "DARK_CNT="
-      : kind == MasterKind::Flat ? "FLAT_CNT=" : "BIAS_CNT=";
-    const std::string_view count_cmt =
-        kind == MasterKind::Dark ? " / Number of dark images combined                "
-      : kind == MasterKind::Flat ? " / Number of flat images combined                "
-                                 : " / Number of bias images combined                ";
-
-    astap::core::update_text(memo, "COMMENT 1", "  Written by ASTAP. www.hnsky.org");
-    astap::core::update_integer(memo, count_key, count_cmt, count);
-    astap::core::update_integer(memo, "CCD-TEMP=",
-        " / Average sensor temperature (Celsius)           ",
-        static_cast<int>(std::lround(temperature_avg)));
-
-    r.ok = astap::core::save_fits(img, memo, output, /*type1=*/-32, /*override2=*/true);
-    r.output  = output;
-    r.message = r.ok ? "ok" : "save failed";
-    return r;
-}
-
-///----------------------------------------
-/// MARK: stack_files
+///  @brief Load the optional master dark/flat into the resident calibration
+///         state so every combiner applies them per frame via apply_dark_and_flat.
 ///----------------------------------------
 
-StackResult stack_files(std::span<const std::filesystem::path> frames,
-                        StackMethod method,
-                        const std::filesystem::path& output,
-                        const std::filesystem::path& master_dark,
-                        const std::filesystem::path& master_flat) {
-    StackResult r;
-    r.frames_input = static_cast<int>(frames.size());
-    if (frames.empty()) { r.message = "no input frames"; return r; }
-
-    // Load the optional master calibration frames into the resident dark/flat
-    // state. The combiner applies them per frame via apply_dark_and_flat.
+void load_masters(const std::filesystem::path& master_dark,
+                  const std::filesystem::path& master_flat) {
     if (!master_dark.empty()) {
         MasterFrameInfo info{};
         if (set_master_dark(master_dark, info)) {
@@ -335,6 +283,109 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
             memo2_message("Warning: could not load master flat " + master_flat.string());
         }
     }
+}
+
+} // namespace
+
+///----------------------------------------
+/// MARK: create_master
+///----------------------------------------
+
+MasterResult create_master(std::span<const std::filesystem::path> frames,
+                           MasterKind kind,
+                           const std::filesystem::path& output,
+                           std::span<const std::filesystem::path> flatdark_frames) {
+    MasterResult r;
+    r.frames_input = static_cast<int>(frames.size());
+    if (frames.empty()) { r.message = "no input frames"; return r; }
+
+    // For a master flat, mean-combine the flat-darks/bias FIRST (into img_bias),
+    // then the flats — so the resident header ends up carrying the flat's cards,
+    // not the flat-dark's (order matters; unit_stack.pas:12428-12450).
+    ImageArray img_bias;
+    int bias_count = 0;
+    const bool do_flatdark = (kind == MasterKind::Flat) && !flatdark_frames.empty();
+    if (do_flatdark) {
+        double bias_temp = 0.0;
+        bias_count = average_frames(flatdark_frames, img_bias, bias_temp);
+        if (bias_count == 0) {
+            memo2_message("Warning: no flat-dark could be averaged; skipping bias subtraction.");
+        }
+    }
+
+    ImageArray img;
+    double temperature_avg = 0.0;
+    const int count = average_frames(frames, img, temperature_avg);
+    r.frames_combined = count;
+    if (count == 0) { r.message = "no frame could be averaged"; return r; }
+
+    // The averaged master is mono; the header carried the last frame's cards.
+    auto& memo = astap::memo1_lines;
+    auto& head = astap::head;
+    head.naxis  = 2;
+    head.naxis3 = 1;
+
+    // Subtract the combined flat-dark from the combined flat (both mono).
+    if (do_flatdark && bias_count > 0) {
+        const int w = head.width, h = head.height;
+        if (static_cast<int>(img_bias[0].size()) == h
+            && static_cast<int>(img_bias[0][0].size()) == w) {
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    img[0][y][x] -= img_bias[0][y][x];
+                }
+            }
+            head.flatdark_count = bias_count;
+            head.calstat += "B";
+            r.flatdarks_combined = bias_count;
+            memo2_message("Applied the combined flat-dark on the combined flat.");
+        } else {
+            memo2_message("Warning: flat and flat-dark dimensions differ; "
+                          "skipping bias subtraction.");
+        }
+    }
+
+    const std::string_view count_key =
+        kind == MasterKind::Dark ? "DARK_CNT="
+      : kind == MasterKind::Flat ? "FLAT_CNT=" : "BIAS_CNT=";
+    const std::string_view count_cmt =
+        kind == MasterKind::Dark ? " / Number of dark images combined                "
+      : kind == MasterKind::Flat ? " / Number of flat images combined                "
+                                 : " / Number of bias images combined                ";
+
+    astap::core::update_text(memo, "COMMENT 1", "  Written by ASTAP. www.hnsky.org");
+    astap::core::update_integer(memo, count_key, count_cmt, count);
+    astap::core::update_integer(memo, "CCD-TEMP=",
+        " / Average sensor temperature (Celsius)           ",
+        static_cast<int>(std::lround(temperature_avg)));
+    if (r.flatdarks_combined > 0) {
+        astap::core::update_integer(memo, "BIAS_CNT=",
+            " / Number of flat-dark or bias images combined.   ", r.flatdarks_combined);
+        astap::core::update_text(memo, "CALSTAT =", "'" + head.calstat + "'");
+    }
+
+    r.ok = astap::core::save_fits(img, memo, output, /*type1=*/-32, /*override2=*/true);
+    r.output  = output;
+    r.message = r.ok ? "ok" : "save failed";
+    return r;
+}
+
+///----------------------------------------
+/// MARK: stack_files
+///----------------------------------------
+
+StackResult stack_files(std::span<const std::filesystem::path> frames,
+                        StackMethod method,
+                        const std::filesystem::path& output,
+                        const std::filesystem::path& master_dark,
+                        const std::filesystem::path& master_flat,
+                        double outlier_sigma) {
+    StackResult r;
+    r.frames_input = static_cast<int>(frames.size());
+    if (frames.empty()) { r.message = "no input frames"; return r; }
+
+    // The combiner applies these per frame via apply_dark_and_flat.
+    load_masters(master_dark, master_flat);
 
     // ---- A + B: pre-solve pass -------------------------------------------
     // Load each frame; if it lacks a WCS, plate-solve it and persist the
@@ -342,7 +393,7 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
     // they never reach the combiner. While each frame is loaded, measure its
     // quality (star_detections / HFD^2) so the sharpest can be chosen as the
     // alignment reference. Mirrors unit_stack.pas:13129-13190 + 12821.
-    struct Candidate { std::string name; double quality; int width; };
+    struct Candidate { std::string name; double quality; int width; double hfd; };
     std::vector<Candidate> cands;
     cands.reserve(frames.size());
     for (const auto& path : frames) {
@@ -369,10 +420,51 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
                       /*report_type=*/0, stars, bck, hfd_median, nullptr);
         const double quality = (hfd_median > 0.0)
             ? static_cast<double>(stars) / (hfd_median * hfd_median) : 0.0;
-        cands.push_back({path.string(), quality, astap::head.width});
+        cands.push_back({path.string(), quality, astap::head.width, hfd_median});
     }
     r.frames_solved = static_cast<int>(cands.size());
     if (cands.empty()) { r.message = "no frame could be solved for alignment"; return r; }
+
+    // ---- B': quality-outlier rejection (list_remove_outliers, :1600) ------
+    // Drop frames whose quality sits more than outlier_sigma standard deviations
+    // below the group mean (and any with a runaway HFD>90). Disabled when
+    // outlier_sigma<=0. Runs before the reference pick so a rejected frame can
+    // never become the reference.
+    if (outlier_sigma > 0.0 && cands.size() > 2) {
+        double sum = 0.0;
+        int good = 0;
+        for (const auto& c : cands) {
+            if (c.hfd > 90.0) continue;
+            sum += c.quality;
+            ++good;
+        }
+        if (good > 0) {
+            const double mean = sum / good;
+            double var = 0.0;
+            for (const auto& c : cands) {
+                if (c.hfd > 90.0) continue;
+                var += (mean - c.quality) * (mean - c.quality);
+            }
+            const double sd = std::sqrt(var / good);
+            memo2_message("Analysing " + std::to_string(good)
+                + " frames for outliers. Average quality (star_detections/sqr(hfd))="
+                + std::format("{:.0f}", mean) + ", sigma=" + std::format("{:.1f}", sd));
+            std::vector<Candidate> kept;
+            kept.reserve(cands.size());
+            for (auto& c : cands) {
+                const bool reject = c.hfd > 90.0
+                                 || (mean - c.quality) > outlier_sigma * sd;
+                if (reject) {
+                    memo2_message("Dropping low-quality outlier: " + c.name);
+                } else {
+                    kept.push_back(std::move(c));
+                }
+            }
+            cands.swap(kept);
+        }
+    }
+    r.frames_kept = static_cast<int>(cands.size());
+    if (cands.empty()) { r.message = "all frames rejected as outliers"; return r; }
 
     // Put the best-quality frame first — the combiner takes the first frame as
     // the alignment reference (put_best_quality_on_top, unit_stack.pas:12821):
@@ -408,6 +500,11 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
     switch (method) {
         case StackMethod::Average:   stack_average(process_as_osc, keep, counter);   break;
         case StackMethod::SigmaClip: stack_sigmaclip(process_as_osc, keep, counter); break;
+        case StackMethod::Mosaic:
+            // Background-difference bound left at 0 (no tile bg-equalisation) —
+            // the headless caller supplies pre-matched frames.
+            stack_mosaic(process_as_osc, keep, /*max_dev_backgr=*/0.0, counter);
+            break;
     }
     r.frames_combined = counter;
     if (counter == 0) { r.message = "combiner produced no output"; return r; }
@@ -418,6 +515,64 @@ StackResult stack_files(std::span<const std::filesystem::path> frames,
                                   output, /*type1=*/-32, /*override2=*/true);
     r.output  = output;
     r.message = r.ok ? "ok" : "save failed";
+    return r;
+}
+
+///----------------------------------------
+/// MARK: calibrate_align_files
+///----------------------------------------
+
+CalibrateResult calibrate_align_files(std::span<const std::filesystem::path> frames,
+                                      const std::filesystem::path& master_dark,
+                                      const std::filesystem::path& master_flat) {
+    CalibrateResult r;
+    r.frames_input = static_cast<int>(frames.size());
+    if (frames.empty()) { r.message = "no input frames"; return r; }
+
+    load_masters(master_dark, master_flat);
+
+    // Pre-solve every frame and persist its WCS: calibration_and_alignment aligns
+    // via astrometric_to_vector, which needs each frame to carry a solution.
+    std::vector<FileToDo> keep;
+    keep.reserve(frames.size());
+    for (const auto& path : frames) {
+        if (!astap::core::load_fits(path, /*light=*/true, /*load_data=*/true,
+                                    /*update_memo=*/true, /*get_ext=*/0,
+                                    astap::memo1_lines, astap::head,
+                                    astap::img_loaded)) {
+            memo2_message("Skipping unreadable frame: " + path.string());
+            continue;
+        }
+        bool solved = astap::head.cd1_1 != 0.0;
+        if (!solved) {
+            solved = update_solution_and_save(astap::img_loaded, astap::head,
+                                              astap::memo1_lines, path);
+        }
+        if (!solved) {
+            memo2_message("Dropping unsolved frame: " + path.string());
+            continue;
+        }
+        keep.push_back(FileToDo{path.string(), -1});
+    }
+    r.frames_solved = static_cast<int>(keep.size());
+    if (keep.empty()) { r.message = "no frame could be solved for alignment"; return r; }
+
+    astap::use_astrometry_internal = true;
+    astap::use_ephemeris_alignment = false;
+    astap::use_manual_align        = false;
+    int counter = 0;
+    calibration_and_alignment(/*process_as_osc=*/0, keep, counter);
+    r.frames_aligned = counter;
+
+    // The routine writes "<stem>_aligned.fit" beside each frame it kept; a frame
+    // that failed alignment has had its name cleared in `keep`.
+    for (const auto& f : keep) {
+        if (f.name.empty()) { continue; }
+        std::filesystem::path p(f.name);
+        r.outputs.push_back(p.parent_path() / (p.stem().string() + "_aligned.fit"));
+    }
+    r.ok = counter > 0;
+    r.message = r.ok ? "ok" : "no frame aligned";
     return r;
 }
 

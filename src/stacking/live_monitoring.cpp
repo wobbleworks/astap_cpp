@@ -66,10 +66,11 @@ bool LiveMonitorSession::file_available(const fs::path& dir, fs::path& out_file)
 		return false;
 	}
 
-	// Pick the OLDEST unprocessed file so captures are displayed in the
-	// order they were written — matters when the user is actively capturing
-	// and we poll less frequently than the cadence.
-	auto best_time = fs::file_time_type::max();
+	// Pick the NEWEST unprocessed file — a live monitor shows the latest
+	// capture, skipping any intermediate frames that arrived since the last
+	// poll (matching Pascal file_available, unit_monitoring.pas:47-52). A
+	// stacker would want every frame; a monitor wants the freshest one.
+	auto best_time = fs::file_time_type::min();
 	auto best_path = fs::path{};
 
 	for (const auto& entry : fs::directory_iterator(dir, ec)) {
@@ -81,7 +82,7 @@ bool LiveMonitorSession::file_available(const fs::path& dir, fs::path& out_file)
 		const auto t = entry.last_write_time(ec);
 		if (ec) continue;
 		if (t <= latest_time_) continue;         // already processed
-		if (t < best_time) {
+		if (t > best_time) {
 			best_time = t;
 			best_path = p;
 		}
@@ -104,9 +105,11 @@ bool LiveMonitorSession::process_frame(const fs::path& filename) {
 		return false;
 	}
 
-	// Apply calibration if a master dark/flat is loaded. This is idempotent
-	// (the apply checks internal state) and mirrors LiveStackSession.
-	(void)apply_dark_and_flat(astap::img_loaded, astap::head);
+	// Apply calibration if enabled and a master dark/flat is loaded (Pascal
+	// gates this on monitor_applydarkflat1). Idempotent — a no-op with no master.
+	if (calibrate_) {
+		(void)apply_dark_and_flat(astap::img_loaded, astap::head);
+	}
 
 	// Auto-demosaic single-channel frames with a Bayer pattern.
 	if (astap::head.naxis3 == 1 && !astap::bayerpat.empty()) {

@@ -18,13 +18,14 @@
 #include <filesystem>
 #include <span>
 #include <string>
+#include <vector>
 
 ///----------------------------------------
 namespace astap::stacking {
 ///----------------------------------------
 
 /// @brief Frame-combination method.
-enum class StackMethod { Average, SigmaClip };
+enum class StackMethod { Average, SigmaClip, Mosaic };
 
 ///----------------------------------------
 ///  @brief Outcome of a batch stack.
@@ -37,6 +38,7 @@ struct StackResult {
     bool                  ok = false;
     int                   frames_input = 0;
     int                   frames_solved = 0;
+    int                   frames_kept = 0;    // survivors after outlier rejection
     int                   frames_combined = 0;
     std::filesystem::path output;
     std::filesystem::path reference;   // frame chosen as the alignment reference
@@ -58,6 +60,12 @@ struct StackResult {
 ///                     to skip). @param master_flat Optional master flat divided
 ///                     out of every frame (empty to skip). Both are applied
 ///                     per-frame by the combiner via @c apply_dark_and_flat.
+///  @param outlier_sigma When @c >0, quality-based outlier rejection is run over
+///                     the solved frames before combining (ports
+///                     @c list_remove_outliers, @c unit_stack.pas:1600): a frame
+///                     whose quality (@c star_detections/HFD²) falls more than
+///                     @p outlier_sigma standard deviations below the group mean
+///                     — or whose HFD exceeds 90 — is dropped. @c 0 disables it.
 ///  @return Result with per-stage counts and an @c ok flag.
 ///----------------------------------------
 
@@ -65,7 +73,41 @@ struct StackResult {
                                       StackMethod method,
                                       const std::filesystem::path& output,
                                       const std::filesystem::path& master_dark = {},
-                                      const std::filesystem::path& master_flat = {});
+                                      const std::filesystem::path& master_flat = {},
+                                      double outlier_sigma = 0.0);
+
+///----------------------------------------
+///  @brief Outcome of a calibrate-and-align pass.
+///  @details @c frames_aligned is how many `<name>_aligned.fit` files were
+///           written; @c outputs lists their paths.
+///----------------------------------------
+
+struct CalibrateResult {
+    bool                               ok = false;
+    int                                frames_input = 0;
+    int                                frames_solved = 0;
+    int                                frames_aligned = 0;
+    std::vector<std::filesystem::path> outputs;
+    std::string                        message;
+};
+
+///----------------------------------------
+///  @brief Calibrate and align a batch WITHOUT combining (stack methods 4 & 5).
+///  @details Pre-solves every frame, then aligns each to the first survivor with
+///           the internal astrometric solver and writes one `<name>_aligned.fit`
+///           per input — the "calibration only" path. Ports
+///           @c calibration_and_alignment (`unit_stack_routines.pas:1978`) driven
+///           headlessly. Optional master dark/flat are applied per frame.
+///  @param frames Input light-frame paths (must be non-empty).
+///  @param master_dark Optional master dark (empty to skip).
+///  @param master_flat Optional master flat (empty to skip).
+///  @return Result with per-stage counts, the written paths and an @c ok flag.
+///----------------------------------------
+
+[[nodiscard]] CalibrateResult calibrate_align_files(
+    std::span<const std::filesystem::path> frames,
+    const std::filesystem::path& master_dark = {},
+    const std::filesystem::path& master_flat = {});
 
 ///----------------------------------------
 ///  @brief Kind of master calibration frame to create.
@@ -85,6 +127,7 @@ struct MasterResult {
     bool                  ok = false;
     int                   frames_input = 0;
     int                   frames_combined = 0;
+    int                   flatdarks_combined = 0;   // bias frames subtracted (Flat only)
     std::filesystem::path output;
     std::string           message;
 };
@@ -101,12 +144,21 @@ struct MasterResult {
 ///  @param frames Raw calibration-frame paths (must be non-empty).
 ///  @param kind Dark, Flat or Bias — selects the count keyword written.
 ///  @param output Destination path for the master FITS.
+///  @param flatdark_frames Optional flat-dark/bias frames (Flat kind only): they
+///                     are mean-combined and subtracted from the combined flat
+///                     before it is written, marking @c CALSTAT with @c 'B' and
+///                     emitting @c BIAS_CNT (ports @c average_flatdarks +
+///                     the flat-dark subtraction of @c unit_stack.pas:12428-12468).
+///                     Ignored for Dark/Bias kinds and when the flat and flat-dark
+///                     dimensions differ.
 ///  @return Result with the combined-frame count and an @c ok flag.
 ///----------------------------------------
 
-[[nodiscard]] MasterResult create_master(std::span<const std::filesystem::path> frames,
-                                         MasterKind kind,
-                                         const std::filesystem::path& output);
+[[nodiscard]] MasterResult create_master(
+    std::span<const std::filesystem::path> frames,
+    MasterKind kind,
+    const std::filesystem::path& output,
+    std::span<const std::filesystem::path> flatdark_frames = {});
 
 ///----------------------------------------
 ///  @brief Per-channel inputs for an LRGB colour combine.

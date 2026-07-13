@@ -28,7 +28,8 @@ namespace astap::stacking {
 ///        Bayer settings apply automatically.
 /// @details Uses modification-time tracking (no file rename) so the
 ///          capture software's output directory is left untouched. Picks
-///          the oldest unprocessed file each poll, preserving FIFO order.
+///          the newest unprocessed file each poll — a monitor shows the
+///          freshest capture, skipping intermediate frames.
 ///----------------------------------------
 
 class LiveMonitorSession final {
@@ -45,6 +46,11 @@ public:
 	void set_frame_loaded_hook(FrameLoadedHook hook) { frame_hook_   = std::move(hook); }
 	void set_message_hook     (MessageHook     hook) { message_hook_ = std::move(hook); }
 
+	/// @brief Enable/disable per-frame dark/flat calibration (Pascal
+	///        @c monitor_applydarkflat1). Default on; a no-op anyway when no
+	///        master dark/flat is loaded.
+	void set_calibrate(bool on) { calibrate_ = on; }
+
 	/// @brief Main polling loop. Blocks until @c astap::esc_pressed is set.
 	void run();
 
@@ -60,6 +66,7 @@ private:
 	std::filesystem::path  watch_dir_;
 	std::filesystem::file_time_type latest_time_{};
 	int                    total_ = 0;
+	bool                   calibrate_ = true;
 
 	FrameLoadedHook frame_hook_;
 	MessageHook     message_hook_;
