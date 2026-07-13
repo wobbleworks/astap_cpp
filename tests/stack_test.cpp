@@ -523,6 +523,90 @@ TEST_CASE("LRGB combine with a luminance channel drives the chroma modulation") 
 	fs::remove_all(s.dir);
 }
 
+TEST_CASE("LRGB colour-mix matrix routes the input channels to chosen output planes") {
+	if (!assets_available()) return;
+	auto s = stage_m31("lrgbmix");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+
+	const std::string db  = " -d " + q(kDbDir.string());
+	const std::string rgb = " -red "   + q(s.files[0].string())
+	                      + " -green " + q(s.files[1].string())
+	                      + " -blue "  + q(s.files[2].string());
+	const auto lrgb = [&](const fs::path& out, const std::string& mix) {
+		std::string cmd = q(kPortBin) + " -lrgb -o " + q(out.string()) + db + rgb;
+		if (!mix.empty()) { cmd += " -colormix \"" + mix + "\""; }
+		return run(cmd);
+	};
+
+	// Baseline: identity matrix (a straight RGB combine).
+	const auto outI = s.dir / "identity.fits";
+	const auto id = lrgb(outI, "");
+	CHECK(id.exit_code == 0);
+	REQUIRE(fs::exists(outI));
+	const double id0 = plane_median(outI, 0), id1 = plane_median(outI, 1), id2 = plane_median(outI, 2);
+	REQUIRE(std::isfinite(id0)); REQUIRE(std::isfinite(id1)); REQUIRE(std::isfinite(id2));
+
+	SUBCASE("a 3-cycle permutation routes each input to a different output plane") {
+		// A NON-symmetric permutation (red→plane1, green→plane2, blue→plane0):
+		//   rr rg rb  gr gg gb  br bg bb  =  0 1 0   0 0 1   1 0 0
+		// A symmetric swap could hide an rg↔gr transpose; a 3-cycle cannot. The
+		// reference (c==0) never accumulates, so this is an exact plane rotation.
+		const auto outP = s.dir / "cycle.fits";
+		const auto p = lrgb(outP, "0 1 0 0 0 1 1 0 0");
+		CHECK(p.exit_code == 0);
+		CHECK(field(p.out, "COLORMIX=") == "0 1 0 0 0 1 1 0 0");
+		CHECK(field(p.out, "LRGB=") == "1");
+		REQUIRE(fs::exists(outP));
+		// Planes must be distinct to begin with, else the rotation proves nothing.
+		REQUIRE(id0 != doctest::Approx(id1));
+		REQUIRE(id1 != doctest::Approx(id2));
+		const double p0 = plane_median(outP, 0), p1 = plane_median(outP, 1), p2 = plane_median(outP, 2);
+		CHECK(p1 == doctest::Approx(id0));   // red input → plane 1
+		CHECK(p2 == doctest::Approx(id1));   // green input → plane 2
+		CHECK(p0 == doctest::Approx(id2));   // blue input → plane 0
+
+		// Comma separators must parse identically to spaces (same tokenizer path).
+		const auto outC = s.dir / "cycle_comma.fits";
+		const auto cc = lrgb(outC, "0,1,0,0,0,1,1,0,0");
+		CHECK(cc.exit_code == 0);
+		REQUIRE(fs::exists(outC));
+		CHECK(plane_median(outC, 0) == doctest::Approx(p0));
+		CHECK(plane_median(outC, 1) == doctest::Approx(p1));
+	}
+
+	SUBCASE("a diagonal weight scales the plane, proving the factor magnitude is used") {
+		// rr=2 (rest identity): plane 0 becomes 2× the identity signal. The c==5
+		// normalisation is 500 + accumulated/count, so (m-500) should double while
+		// the count (1 sample) is unchanged. Guards against a bug that treats any
+		// non-zero factor as 1.0. A small epsilon absorbs the black-spot border fill.
+		const auto outD = s.dir / "double.fits";
+		const auto d = lrgb(outD, "2 0 0 0 1 0 0 0 1");
+		CHECK(d.exit_code == 0);
+		REQUIRE(fs::exists(outD));
+		const double d0 = plane_median(outD, 0);
+		REQUIRE(std::isfinite(d0));
+		REQUIRE(std::abs(id0 - 500.0) > 1.0);   // baseline signal must be non-trivial
+		CHECK((d0 - 500.0) == doctest::Approx(2.0 * (id0 - 500.0)).epsilon(0.05));
+		// Green/blue stay identity.
+		CHECK(plane_median(outD, 1) == doctest::Approx(id1));
+	}
+
+	SUBCASE("a wrong-count -colormix falls back to identity and suppresses the echo") {
+		// Only the exact 9-value form is honoured; anything else warns to stderr and
+		// leaves the identity default (main.cpp), producing the baseline combine.
+		const auto outW = s.dir / "wrongcount.fits";
+		const auto w = lrgb(outW, "1 0 0");
+		CHECK(w.exit_code == 0);                       // not a fatal parse error
+		CHECK(field(w.out, "COLORMIX=").empty());      // no echo when not applied
+		REQUIRE(fs::exists(outW));
+		CHECK(plane_median(outW, 0) == doctest::Approx(id0));
+		CHECK(plane_median(outW, 1) == doctest::Approx(id1));
+		CHECK(plane_median(outW, 2) == doctest::Approx(id2));
+	}
+
+	fs::remove_all(s.dir);
+}
+
 TEST_CASE("master-frame creation averages raw frames into a mono FITS") {
 	if (!assets_available()) return;
 	auto s = stage_m31("mkdark");

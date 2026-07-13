@@ -143,6 +143,9 @@ private:
 	QComboBox* _alignmentCombo = nullptr;
 	QDoubleSpinBox* _sigmaFactor = nullptr;
 	QSpinBox* _maxStars = nullptr;
+	// LRGB colour-mix matrix (Pascal rr1..bb1). Rows = input channel R/G/B,
+	// columns = output channel R/G/B; identity = a straight RGB combine.
+	QDoubleSpinBox* _colorMix[3][3] = {};
 
 	// Footer
 	QPushButton* _stackButton = nullptr;

@@ -172,6 +172,7 @@ struct Args {
     std::optional<std::string> ch_blue;       // -lrgb blue channel
     std::optional<std::string> ch_lum;        // -lrgb luminance channel
     std::optional<std::string> ch_rgb;        // -lrgb pre-combined colour frame
+    std::optional<std::string> colormix;      // -lrgb 9-factor colour-mix matrix
     std::vector<std::filesystem::path> focus_files;
     std::string                raw_cmdline;
     // Positional argv remainder (Pascal treats non-option argv[1] as filename).
@@ -365,6 +366,7 @@ Args parse_args(int argc, char* argv[]) {
         if (try_value("blue",   [&](auto v){ out.ch_blue      = v; }))                   continue;
         if (try_value("lum",    [&](auto v){ out.ch_lum       = v; }))                   continue;
         if (try_value("rgb",    [&](auto v){ out.ch_rgb       = v; }))                   continue;
+        if (try_value("colormix", [&](auto v){ out.colormix   = v; }))                   continue;
 
         // -focusN  (N = 1, 2, 3, ...)
         if (arg.starts_with("-focus") || arg.starts_with("--focus")) {
@@ -933,6 +935,31 @@ int main(int argc, char* argv[]) {
         if (a.ch_blue)  in.blue      = *a.ch_blue;
         if (a.ch_lum)   in.luminance = *a.ch_lum;
         if (a.ch_rgb)   in.rgb       = *a.ch_rgb;
+        // -colormix "rr rg rb gr gg gb br bg bb": 9 colour-calibration factors
+        // (space- or comma-separated). Absent ⇒ identity (straight RGB combine).
+        if (a.colormix) {
+            std::vector<double> v;
+            std::string tok;
+            const auto flush = [&]() {
+                if (!tok.empty()) { v.push_back(std::strtod(tok.c_str(), nullptr)); tok.clear(); }
+            };
+            for (const char ch : *a.colormix) {
+                if (ch == ',' || ch == ' ' || ch == '\t') { flush(); }
+                else { tok.push_back(ch); }
+            }
+            flush();
+            if (v.size() == 9) {
+                // Order is input-major: v[0..2]=rr,rg,rb (red input → r,g,b out),
+                // v[3..5]=gr,gg,gb, v[6..8]=br,bg,bb — matching ColourMixMatrix's
+                // member order. Keep this in lockstep if the struct is ever reordered.
+                astap::lrgb_colour_mix = {v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]};
+                std::cout << "COLORMIX=" << *a.colormix << '\n';
+            } else {
+                std::cerr << "astap: -colormix expects 9 values "
+                             "(rr rg rb gr gg gb br bg bb); got " << v.size()
+                          << ", using identity\n";
+            }
+        }
         std::filesystem::path out = a.output ? std::filesystem::path{*a.output}
                                              : std::filesystem::path{"lrgb.fits"};
         const auto res = astap::stacking::combine_lrgb(in, out);

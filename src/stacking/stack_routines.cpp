@@ -495,13 +495,15 @@ void stack_LRGB(std::span<FileToDo> files_to_process, int& counter) {
     jd_end_last = 0.0;
     init = false;
 
-    // Combining colours. Identity mix + zero offsets; UI for colour calibration
-    // isn't ported yet.
+    // Combining colours. The colour-mix matrix comes from the caller-set setting
+    // (Pascal rr1..bb1 calibration text boxes); identity = a straight RGB combine.
     memo2_message("Combining colours.");
-    rr_factor = 1.0; rg_factor = 0.0; rb_factor = 0.0;
-    gr_factor = 0.0; gg_factor = 1.0; gb_factor = 0.0;
-    br_factor = 0.0; bg_factor = 0.0; bb_factor = 1.0;
+    rr_factor = astap::lrgb_colour_mix.rr; rg_factor = astap::lrgb_colour_mix.rg; rb_factor = astap::lrgb_colour_mix.rb;
+    gr_factor = astap::lrgb_colour_mix.gr; gg_factor = astap::lrgb_colour_mix.gg; gb_factor = astap::lrgb_colour_mix.gb;
+    br_factor = astap::lrgb_colour_mix.br; bg_factor = astap::lrgb_colour_mix.bg; bb_factor = astap::lrgb_colour_mix.bb;
 
+    // red_add/green_add/blue_add have no Pascal counterpart (the original luminance
+    // step is `img_average - 475` with no offset); keep them inert at 0.
     red_add = 0.0; green_add = 0.0; blue_add = 0.0;
     
     for (c = 0; c < static_cast<int>(files_to_process.size()); ++c) {

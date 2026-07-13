@@ -24,6 +24,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -901,6 +902,37 @@ void StackWindow::buildSettingsTab() {
 	_maxStars->setValue(500);
 	form->addRow(tr("Max stars for matching:"), _maxStars);
 
+	// LRGB colour-mix matrix (Pascal rr1..bb1 calibration text boxes). Rows are the
+	// input channel, columns the output channel; identity = a straight RGB combine.
+	// Applied only when LRGB is active (the Light-filter checkbox).
+	auto* mixGroup = new QGroupBox(tr("Colour-mix matrix (LRGB)"), page);
+	mixGroup->setToolTip(
+		tr("Weight of each colour input channel in each output channel. The identity "
+		   "(diagonal 1) is a straight RGB combine; e.g. set R-in→B and B-in→R to swap "
+		   "red and blue. Weights of zero or below are ignored (as in the original). "
+		   "Applies when Light filter (LRGB) is enabled."));
+	auto* grid = new QGridLayout(mixGroup);
+	grid->addWidget(new QLabel(tr("out →"), mixGroup), 0, 0);
+	const char* chan[3] = {"R", "G", "B"};
+	for (int j = 0; j < 3; ++j) {
+		auto* h = new QLabel(QString::fromLatin1(chan[j]), mixGroup);
+		h->setAlignment(Qt::AlignCenter);
+		grid->addWidget(h, 0, j + 1);
+	}
+	for (int i = 0; i < 3; ++i) {
+		grid->addWidget(new QLabel(tr("%1 in").arg(QString::fromLatin1(chan[i])), mixGroup), i + 1, 0);
+		for (int j = 0; j < 3; ++j) {
+			auto* sp = new QDoubleSpinBox(mixGroup);
+			sp->setRange(-9.999, 9.999);
+			sp->setSingleStep(0.1);
+			sp->setDecimals(3);
+			sp->setValue(i == j ? 1.0 : 0.0);   // identity
+			_colorMix[i][j] = sp;
+			grid->addWidget(sp, i + 1, j + 1);
+		}
+	}
+	form->addRow(mixGroup);
+
 	_tabs->addTab(page, tr("Settings"));
 }
 
@@ -914,6 +946,14 @@ void StackWindow::applySettingsToEngine() {
 
 	astap::sigma_clip_factor = _sigmaFactor->value();
 	astap::max_stars_setting = _maxStars->value();
+
+	// LRGB colour-mix matrix (rows = input R/G/B, cols = output R/G/B). Harmless for
+	// the non-LRGB methods, which never read it.
+	astap::lrgb_colour_mix = {
+		_colorMix[0][0]->value(), _colorMix[0][1]->value(), _colorMix[0][2]->value(),
+		_colorMix[1][0]->value(), _colorMix[1][1]->value(), _colorMix[1][2]->value(),
+		_colorMix[2][0]->value(), _colorMix[2][1]->value(), _colorMix[2][2]->value(),
+	};
 }
 
 void StackWindow::addFiles() {

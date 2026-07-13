@@ -147,3 +147,63 @@ jobs:
         working-directory: ASTAP++
         shell: cmd
         run: ctest --test-dir tests/build --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # macOS (macos-15, Apple Silicon): Apple Clang, Qt from aqtinstall action.
+  # Builds the library + CLI + tests + Qt GUI, runs ctest. This is the platform
+  # ASTAP++ is developed on, so it exercises the same toolchain as local builds.
+  # Ninja is not preinstalled on the macOS runner, so it comes from Homebrew.
+  # ---------------------------------------------------------------------------
+  macos:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          path: ASTAP++
+
+      - name: Checkout doctest
+        uses: actions/checkout@v5
+        with:
+          repository: doctest/doctest
+          ref: v2.4.12
+          path: doctest
+
+      - name: Install build deps
+        run: brew install ninja
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.1
+          host: mac
+          target: desktop
+          arch: clang_64
+          cache: true
+
+      - name: Configure (library + CLI + GUI)
+        working-directory: ASTAP++
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DASTAP_BUILD_CLI=ON
+          -DASTAP_BUILD_GUI=ON
+
+      - name: Build
+        working-directory: ASTAP++
+        run: cmake --build build --parallel
+
+      - name: Configure tests
+        working-directory: ASTAP++
+        run: >
+          cmake -S tests -B tests/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DASTAP_DOCTEST_HEADERS=${{ github.workspace }}/doctest
+
+      - name: Build tests
+        working-directory: ASTAP++
+        run: cmake --build tests/build --parallel
+
+      - name: Run tests
+        working-directory: ASTAP++
+        run: ctest --test-dir tests/build --output-on-failure

@@ -171,6 +171,19 @@ extern double hfd_min_setting;             ///< @brief Minimum star HFD for stac
 extern double hfd_max_setting;             ///< @brief Maximum star HFD for stacking (default 10; raise for DSS2 plates).
 extern double sigma_clip_factor;           ///< @brief Stdev factor for sigma-clip rejection.
 
+/// @brief LRGB colour-mix matrix (the Pascal @c rr1..bb1 calibration text boxes,
+///        @c unit_stack_routines.pas). Each colour input channel contributes a
+///        weighted amount to each output channel: the red input adds @c rr / @c rg /
+///        @c rb to the red / green / blue outputs, green adds @c gr / @c gg / @c gb,
+///        blue adds @c br / @c bg / @c bb. The identity (diagonal = 1) is a straight
+///        RGB combine. Consumed by @c stack_LRGB.
+struct ColourMixMatrix {
+    double rr = 1.0, rg = 0.0, rb = 0.0;   ///< red input → (red, green, blue) output
+    double gr = 0.0, gg = 1.0, gb = 0.0;   ///< green input → (red, green, blue) output
+    double br = 0.0, bg = 0.0, bb = 1.0;   ///< blue input → (red, green, blue) output
+};
+extern ColourMixMatrix lrgb_colour_mix;    ///< @brief LRGB colour calibration (identity default).
+
 /// MARK: Memos
 
 extern std::vector<std::string> memo1_lines;   ///< @brief FITS header memo.

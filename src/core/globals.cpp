@@ -144,6 +144,7 @@ bool   skip_alignment           = false;
 double hfd_min_setting          = 0.0;    // 0 = auto (engine defaults to 0.8)
 double hfd_max_setting          = 10.0;   // Matches Pascal. Real stars fit well inside; extended sources (galaxies) are correctly excluded.
 double sigma_clip_factor        = 2.0;
+ColourMixMatrix lrgb_colour_mix = {};   // identity — a straight RGB combine
 
 /// MARK: Memos
 
