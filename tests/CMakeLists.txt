@@ -94,6 +94,10 @@ astap_add_test(raster_rotate_test
 	"${ASTAP_SRC}/stacking/raster_rotate.cpp"
 )
 
+astap_add_test(live_stacking_test
+	"${ASTAP_SRC}/stacking/live_colour_correction.cpp"
+)
+
 astap_add_test(online_gaia_test
 	"${ASTAP_SRC}/reference/online_gaia.cpp"
 )

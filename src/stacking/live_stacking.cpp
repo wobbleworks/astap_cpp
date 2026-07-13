@@ -30,6 +30,7 @@
 #include "../core/demosaic.h"
 #include "../core/fits.h"
 #include "../core/globals.h"
+#include "../core/photometry.h"   // get_background (colour correction)
 #include "../solving/astrometric_solving.h"
 #include "../solving/star_align.h"
 
@@ -116,9 +117,24 @@ using astap::solving::quad_star_distances2;
 ///----------------------------------------
 
 LiveStackSession::LiveStackSession(fs::path watch_dir) :
-    
+
     // Initialize members
     watch_dir_(std::move(watch_dir)) {
+}
+
+ColourCorrection colour_correction_factors(const ImageArray& img) {
+    if (img.size() < 3) {
+        return {};   // not a 3-colour image → identity, inactive (Pascal early exit)
+    }
+    // Measure each channel's background + star level. Red is measured last so the
+    // module histogram is left describing red, matching the Pascal ordering.
+    auto bR = astap::Background{};
+    auto bG = astap::Background{};
+    auto bB = astap::Background{};
+    astap::core::get_background(1, img, /*calc_hist=*/true, /*calc_noise_level=*/true, bG);
+    astap::core::get_background(2, img, /*calc_hist=*/true, /*calc_noise_level=*/true, bB);
+    astap::core::get_background(0, img, /*calc_hist=*/true, /*calc_noise_level=*/true, bR);
+    return colour_correction_from_backgrounds(bR, bG, bB);
 }
 
 void LiveStackSession::reset_var() noexcept {
@@ -310,12 +326,18 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
                        astap::max_stars_setting,
                        /*get_hist=*/true, starlist, warning);
 
-    // Alignment.
+    // Alignment. Match the Pascal quad assignment (unit_live_stacking.pas:262,
+    // 313): the reference (first) frame populates quad_star_distances2 and each
+    // new source frame populates quad_star_distances1. find_offset_and_rotation
+    // solves solution := quad2 -> quad1, so this assignment makes it map
+    // reference -> source (Pascal's deliberate "inverse mapping"). The
+    // accumulation loop below depends on that direction to gather each reference
+    // pixel from the source pixel it came from.
     if (!init_) {
-        find_quads(starlist, quad_star_distances1);
+        find_quads(starlist, quad_star_distances2);
         reset_solution_vectors(1.0);
     } else {
-        find_quads(starlist, quad_star_distances2);
+        find_quads(starlist, quad_star_distances1);
         if (!find_offset_and_rotation(3, astap::quad_tolerance)) {
             emit_message("Not enough quad matches — skipping " +
                          filename.filename().string());
@@ -329,6 +351,15 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
     ++counter_;
     ++total_counter_;
 
+    // On the first accepted (reference) frame, derive the colour-correction factors
+    // from it (Pascal computes these at c==0 init, unit_live_stacking.pas:281-303).
+    if (counter_ == 1 && colour_correction_) {
+        cc_ = colour_correction_factors(astap::img_loaded);
+        if (cc_.active) {
+            emit_message("Colour correction: white-balancing green/blue to red.");
+        }
+    }
+
     // Accumulate exposure / temperature / Julian-day totals for the stacked
     // header (unit_live_stacking.pas:335-344). The live path tracks only the
     // start date and the midpoint sum (no jd_end_last, unlike the batch stackers).
@@ -338,24 +369,45 @@ bool LiveStackSession::process_frame(const fs::path& filename) {
     astap::jd_start_first = std::min(astap::jd_start, astap::jd_start_first);
     astap::jd_sum        += astap::jd_mid;
 
-    // Running-average accumulation. calc_newx_newy maps (fitsX+1, fitsY+1)
-    // through solution_vectorX/Y (vector-based branch) to reference pixel
-    // space, leaving results in x_new_float / y_new_float (0-based).
-    for (auto fitsY = 0; fitsY < astap::head.height; ++fitsY) {
-        for (auto fitsX = 0; fitsX < astap::head.width; ++fitsX) {
+    // Running-average accumulation via inverse mapping (unit_live_stacking.pas:353-410).
+    // Iterate the reference-image grid; for each reference pixel find the source
+    // pixel it came from. calc_newx_newy's vector-based branch applies
+    // solution_vectorX/Y (reference -> source, per the quad assignment above),
+    // taking a 1-based reference coordinate and leaving the 0-based source pixel
+    // in x_new_float / y_new_float. Read that source pixel, write the reference
+    // pixel. Gathering visits every reference pixel exactly once, so the running
+    // mean is never double-written within a frame and no destination pixel is
+    // left unwritten (zero) — the two defects of the previous forward scatter.
+    for (auto fitsY = 0; fitsY < height_max_; ++fitsY) {
+        for (auto fitsX = 0; fitsX < width_max_; ++fitsX) {
             calc_newx_newy(/*vector_based=*/true,
                            static_cast<double>(fitsX + 1),
                            static_cast<double>(fitsY + 1));
             const auto xn = static_cast<int>(std::round(astap::x_new_float));
             const auto yn = static_cast<int>(std::round(astap::y_new_float));
-            if (xn < 0 || xn >= width_max_ ||
-                yn < 0 || yn >= height_max_) {
+            // Bounds-check the SOURCE pixel against the source-frame dimensions
+            // (Pascal width_maxS / height_maxS, unit_live_stacking.pas:338-339,360).
+            if (xn < 0 || xn >= astap::head.width ||
+                yn < 0 || yn >= astap::head.height) {
                 continue;
             }
             for (auto col = 0; col < astap::head.naxis3; ++col) {
-                auto& acc = img_average_[col][yn][xn];
-                acc = (acc * (counter_ - 1) +
-                       astap::img_loaded[col][fitsY][fitsX]) / counter_;
+                auto& acc = img_average_[col][fitsY][fitsX];
+                if (colour_correction_) {
+                    // Pascal colour-correction path (unit_live_stacking.pas:381-406):
+                    // skip zero (masked) source pixels, else (value + add)·multiply /
+                    // largest, clamped >= 0, into the running average.
+                    double dum = astap::img_loaded[col][yn][xn];
+                    if (dum == 0.0) {
+                        continue;   // 'if dum<>0' — leave the running average untouched
+                    }
+                    dum = (dum + cc_.add[col]) * cc_.multiply[col] / cc_.largest;
+                    if (dum < 0.0) { dum = 0.0; }
+                    acc = (acc * (counter_ - 1) + dum) / counter_;
+                } else {
+                    acc = (acc * (counter_ - 1) +
+                           astap::img_loaded[col][yn][xn]) / counter_;
+                }
             }
         }
     }

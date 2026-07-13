@@ -23,12 +23,26 @@
 
 #include "../types.h"
 #include "../core/globals.h"   // esc_pressed, pause_pressed, live_stacking
+#include "live_colour_correction.h"   // ColourCorrection, colour_correction_from_backgrounds
 
 ///----------------------------------------
 namespace astap::stacking {
 ///----------------------------------------
 
 using astap::ImageArray;
+
+///----------------------------------------
+///   @brief Derive colour-correction factors from a 3-colour reference image.
+/// @details Ports @c auto_background_level (@c unit_stack.pas:11694): measures each
+///          channel's background and star level with @c get_background, then
+///          white-balances green/blue to red via @ref colour_correction_from_backgrounds.
+///          Returns an inactive identity result (a no-op correction) for images with
+///          fewer than three channels.
+///   @param img Reference image (RGB planes).
+///   @return Factors for @ref LiveStackSession's colour-correction path.
+///----------------------------------------
+
+[[nodiscard]] ColourCorrection colour_correction_factors(const ImageArray& img);
 
 ///----------------------------------------
 /// MARK: Public API
@@ -79,6 +93,10 @@ public:
 
     /// @brief Install a hook called with log messages.
     void set_message_hook(MessageHook hook) { message_hook_ = std::move(hook); }
+
+    /// @brief Enable per-channel colour correction (white-balance G/B to R). The
+    ///        factors are derived from the first accepted 3-colour reference frame.
+    void set_colour_correction(bool on) { colour_correction_ = on; }
 
     ///----------------------------------------
     ///  @brief Main polling / stacking loop. Returns when @c astap::esc_pressed is set.
@@ -157,6 +175,11 @@ private:
     int  old_width_     = 0;
     int  old_height_    = 0;
     int  binning_       = 1;
+
+    // Live colour correction. Enabled by set_colour_correction; the factors are
+    // derived from the first accepted reference frame (unit_live_stacking.pas).
+    bool             colour_correction_ = false;
+    ColourCorrection cc_{};
 
     ImageArray img_average_;
 
