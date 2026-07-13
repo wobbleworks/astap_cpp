@@ -8,6 +8,7 @@
 ///----------------------------------------
 
 #include "online.h"
+#include "from_chars_fp.h"   // astap::core::from_chars (portable FP parse)
 
 #include <algorithm>
 #include <cctype>
@@ -102,7 +103,7 @@ constexpr auto kPi = std::numbers::pi;
     const auto* first = t.data();
     const auto* last = first + t.size();
     auto v = 0.0;
-    auto [ptr, ec] = std::from_chars(first, last, v);
+    auto [ptr, ec] = astap::core::from_chars(first, last, v);
     if (ec != std::errc{}) {
         return false;
     }

@@ -3,6 +3,7 @@
 
 #include "annotation.h"
 
+#include "../core/from_chars_fp.h"   // astap::core::from_chars (portable FP parse)
 #include "../core/wcs.h"
 
 #include <algorithm>
@@ -138,7 +139,7 @@ int parse_int(std::string_view s)
 double parse_double(std::string_view s)
 {
 	double val = 0.0;
-	std::from_chars(s.data(), s.data() + s.size(), val);
+	astap::core::from_chars(s.data(), s.data() + s.size(), val);
 	return val;
 }
 
@@ -192,9 +193,9 @@ std::optional<DeepSkyMatch> find_object(std::string_view object_name,
 			// from_chars returns 0.0 on failure — but PA=0 is valid,
 			// so we check whether parsing actually consumed input.
 			double tmp = 0.0;
-			auto [ptr, ec] = std::from_chars(pa_field.data(),
-			                                 pa_field.data() + pa_field.size(),
-			                                 tmp);
+			auto [ptr, ec] = astap::core::from_chars(pa_field.data(),
+			                                         pa_field.data() + pa_field.size(),
+			                                         tmp);
 			if (ec == std::errc{})
 				pa = v;
 		}
@@ -366,8 +367,8 @@ std::vector<DeepSkyObject> read_deepsky(std::span<const std::string> database_li
 		double pa = 999.0;
 		{
 			double v = 0.0;
-			auto [ptr, ec] = std::from_chars(pa_field.data(),
-			                                 pa_field.data() + pa_field.size(), v);
+			auto [ptr, ec] = astap::core::from_chars(pa_field.data(),
+			                                         pa_field.data() + pa_field.size(), v);
 			(void)ptr;
 			if (ec == std::errc{}) pa = v;
 		}

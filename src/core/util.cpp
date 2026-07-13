@@ -8,6 +8,7 @@
 ///----------------------------------------
 
 #include "util.h"
+#include "from_chars_fp.h"
 
 #include <algorithm>
 #include <array>
@@ -73,7 +74,7 @@ namespace {
     }
     auto* first = trimmed.data();
     auto* last  = first + trimmed.size();
-    auto [ptr, ec] = std::from_chars(first, last, out);
+    auto [ptr, ec] = astap::core::from_chars(first, last, out);
     if (ec != std::errc{}) {
         return false;
     }

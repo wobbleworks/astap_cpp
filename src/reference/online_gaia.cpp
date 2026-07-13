@@ -8,6 +8,8 @@
 
 #include "online_gaia.h"
 
+#include "../core/from_chars_fp.h"   // astap::core::from_chars (portable FP parse)
+
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -93,7 +95,7 @@ constexpr auto kPi = std::numbers::pi;
     }
     
     auto out = 0.0;
-    auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
+    auto [p, ec] = astap::core::from_chars(s.data(), s.data() + s.size(), out);
     if (ec != std::errc{}) {
         return 0.0;
     }

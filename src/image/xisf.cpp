@@ -8,6 +8,8 @@
 
 #include "xisf.h"
 
+#include "../core/from_chars_fp.h"   // astap::core::from_chars (portable FP parse)
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -101,7 +103,7 @@ constexpr auto npos = std::string::npos;
     const auto* first = s.data() + a;
     const auto* last  = s.data() + b;
     auto v = 0.0;
-    const auto [ptr, ec] = std::from_chars(first, last, v);
+    const auto [ptr, ec] = astap::core::from_chars(first, last, v);
     if (ec != std::errc()) {
         return false;
     }
