@@ -159,28 +159,17 @@ int         process_as_osc   = 0;
 /// MARK: Master calibration library (per-frame hot-reload)
 ///----------------------------------------
 
-// A pre-analysed candidate master; the metadata mirrors the columns the GUI's
-// dark / flat listviews carry (exposure / temperature / gain / dimensions / JD,
-// plus filter + CALSTAT for flats).
-struct MasterCandidate {
-    std::filesystem::path path;
-    int         exposure = 0;        // round(head.exposure)
-    int         set_temperature = 0;
-    std::string gain;                // egain if present, else gain
-    int         width = 0;
-    int         height = 0;
-    double      jd = 0.0;            // observation JD (start)
-    std::string filter_name;        // flats
-    std::string calstat;            // flats — reject a calibrated light/dark
-};
-
-std::vector<MasterCandidate> dark_library;
-std::vector<MasterCandidate> flat_library;
+// The candidate libraries the per-frame selector chooses from (pre-analysed
+// header metadata). Empty ⇒ the single-resident-master path (set_master_dark) is
+// used instead.
+std::vector<MasterMetadata> dark_library;
+std::vector<MasterMetadata> flat_library;
 std::string last_dark_loaded;
 std::string last_flat_loaded;
 MasterMatchOptions master_match;
 
-// Case-insensitive string equality (Pascal AnsiCompareText).
+// Case-insensitive string equality (Pascal AnsiCompareText). Used by the public
+// master_flat_issue below (accessible throughout the TU).
 [[nodiscard]] bool iequals(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) { return false; }
     for (std::size_t i = 0; i < a.size(); ++i) {
@@ -192,37 +181,12 @@ MasterMatchOptions master_match;
     return true;
 }
 
-// Read a candidate master's header (no pixels) into a MasterCandidate.
-[[nodiscard]] bool analyse_candidate(const std::filesystem::path& path,
-                                     MasterCandidate& out) {
-    auto memo = std::vector<std::string>{};
-    auto img  = ImageArray{};
-    auto head = Header{};
-    if (!astap::core::load_fits(path, /*light=*/false, /*load_data=*/false,
-                                /*update_memo=*/true, /*get_ext=*/0,
-                                memo, head, img)) {
-        return false;
-    }
-    out.path            = path;
-    out.exposure        = static_cast<int>(std::lrint(head.exposure));
-    out.set_temperature = head.set_temperature;
-    out.gain            = head.egain.empty() ? head.gain : head.egain;
-    out.width           = head.width;
-    out.height          = head.height;
-    out.filter_name     = head.filter_name;
-    out.calstat         = head.calstat;
-    // JD from DATE-OBS (date_to_jd writes the jd_start/jd_mid globals).
-    date_to_jd(head.date_obs, head.date_avg, head.exposure);
-    out.jd = jd_start;
-    return true;
-}
-
 void build_library(std::span<const std::filesystem::path> masters,
-                   std::vector<MasterCandidate>& library) {
+                   std::vector<MasterMetadata>& library) {
     library.clear();
     for (const auto& path : masters) {
-        MasterCandidate cand;
-        if (analyse_candidate(path, cand)) {
+        MasterMetadata cand;
+        if (analyse_master(path, cand)) {
             library.push_back(std::move(cand));
         } else {
             memo2_message("Skipping unreadable master: " + path.string());
@@ -252,18 +216,8 @@ void load_master_dark(int jd, Header& hd) {
     std::string filen;
     double day_offset = 99999999.0;
     for (const auto& cand : dark_library) {
-        if (master_match.classify_exposure && light_exposure != cand.exposure) {
-            continue;
-        }
-        if (master_match.classify_temperature
-            && std::abs(light_temperature - cand.set_temperature) > master_match.delta_temp) {
-            continue;
-        }
-        if (master_match.classify_gain && dark_gain != cand.gain) {
-            continue;
-        }
-        if (hd.width != cand.width || hd.height != cand.height) {
-            continue;  // dimensions must always match
+        if (!master_dark_issue(hd, cand, master_match).empty()) {
+            continue;  // incompatible with this light
         }
         const double d = std::abs(cand.jd - jd);
         if (d < day_offset) {
@@ -330,19 +284,8 @@ void load_master_flat(int jd, Header& hd) {
     std::string filen;
     double day_offset = 99999999.0;
     for (const auto& cand : flat_library) {
-        if (master_match.classify_filter
-            && !iequals(hd.filter_name, cand.filter_name)) {
-            continue;
-        }
-        if (hd.width != cand.width || hd.height != cand.height) {
-            continue;
-        }
-        // A raw flat carries no D/F in CALSTAT; a D/F there means it is a
-        // calibrated light/dark, not a flat. (The Pascal `pos('F',imagetype)`
-        // override is omitted — the port's Header has no IMAGETYP field.)
-        if (cand.calstat.find('D') != std::string::npos
-            || cand.calstat.find('F') != std::string::npos) {
-            continue;
+        if (!master_flat_issue(hd, cand, master_match).empty()) {
+            continue;  // incompatible with this light
         }
         const double d = std::abs(cand.jd - jd);
         if (d < day_offset) {
@@ -964,6 +907,72 @@ void set_dark_library(std::span<const std::filesystem::path> masters) {
 void set_flat_library(std::span<const std::filesystem::path> masters) {
     build_library(masters, flat_library);
     last_flat_loaded.clear();
+}
+
+bool analyse_master(const std::filesystem::path& path, MasterMetadata& out) {
+    auto memo = std::vector<std::string>{};
+    auto img  = ImageArray{};
+    auto head = Header{};
+    if (!astap::core::load_fits(path, /*light=*/false, /*load_data=*/false,
+                                /*update_memo=*/true, /*get_ext=*/0,
+                                memo, head, img)) {
+        return false;
+    }
+    out.path            = path;
+    out.exposure        = static_cast<int>(std::lrint(head.exposure));
+    out.set_temperature = head.set_temperature;
+    out.gain            = head.egain.empty() ? head.gain : head.egain;
+    out.xbinning        = head.xbinning;
+    out.width           = head.width;
+    out.height          = head.height;
+    out.date_obs        = head.date_obs;
+    out.filter_name     = head.filter_name;
+    out.calstat         = head.calstat;
+    // JD from DATE-OBS (date_to_jd writes the jd_start global).
+    date_to_jd(head.date_obs, head.date_avg, head.exposure);
+    out.jd = astap::jd_start;
+    return true;
+}
+
+std::string master_dark_issue(const Header& light, const MasterMetadata& candidate,
+                              const MasterMatchOptions& options) {
+    // Same gate order + operators as the Pascal (unit_stack.pas:12049-12064); the
+    // returned string is the reason ASTAP writes to its Compatibility column
+    // (:12068-12080), showing the light's required value. Empty ⇒ eligible.
+    const int light_exposure = static_cast<int>(std::lrint(light.exposure));
+    if (options.classify_exposure && light_exposure != candidate.exposure) {
+        return "exposure<>" + std::to_string(light_exposure);
+    }
+    if (options.classify_temperature
+        && std::abs(light.set_temperature - candidate.set_temperature) > options.delta_temp) {
+        return "temperature<>" + std::to_string(light.set_temperature);
+    }
+    const std::string light_gain = light.egain.empty() ? light.gain : light.egain;
+    if (options.classify_gain && light_gain != candidate.gain) {
+        return "gain<>" + light_gain;
+    }
+    if (light.width != candidate.width)   { return "width<>"  + std::to_string(light.width); }
+    if (light.height != candidate.height) { return "height<>" + std::to_string(light.height); }
+    return "";
+}
+
+std::string master_flat_issue(const Header& light, const MasterMetadata& candidate,
+                              const MasterMatchOptions& options) {
+    // Pascal order (unit_stack.pas:12145-12163): filter (non-fatal in the GUI, but
+    // still excludes the candidate) → width → height → not-a-flat. The port surfaces
+    // the filter mismatch as a reason string too (more informative; selection is
+    // unchanged). A D/F in CALSTAT marks a calibrated light/dark, not a flat; the
+    // Pascal `pos('F',imagetype)` override is omitted (port Header has no IMAGETYP).
+    if (options.classify_filter && !iequals(light.filter_name, candidate.filter_name)) {
+        return "filter<>" + light.filter_name;
+    }
+    if (light.width != candidate.width)   { return "width<>"  + std::to_string(light.width); }
+    if (light.height != candidate.height) { return "height<>" + std::to_string(light.height); }
+    if (candidate.calstat.find('D') != std::string::npos
+        || candidate.calstat.find('F') != std::string::npos) {
+        return "Calibration, not a flat!";
+    }
+    return "";
 }
 
 ///----------------------------------------

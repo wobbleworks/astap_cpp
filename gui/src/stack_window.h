@@ -19,6 +19,7 @@
 
 #include <memory>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -60,17 +61,25 @@ private slots:
 	void removeSelected();
 	void clearList();
 	void startStack();
-	void browseMasterDark();
-	void browseMasterFlat();
-	void clearMasterDark();
-	void clearMasterFlat();
+	// Dark / flat candidate-library management (mirrors the Pascal dark/flat tabs).
+	void addDarkFiles();
+	void addFlatFiles();
+	void removeDarks();
+	void removeFlats();
+	void clearDarks();
+	void clearFlats();
 
 private:
 	void buildLightsTab();
-	void buildCalibrationTab();
+	void buildDarksTab();
+	void buildFlatsTab();
 	void buildSettingsTab();
+	QWidget* buildClassifyBar();
 	void applySettingsToEngine();
-	void hydrateCalibrationFromSettings();
+	void applyLibrariesToEngine();
+	void addMasterFiles(QTableWidget* table, const QString& title);
+	void removeSelectedRows(QTableWidget* table);
+	void refreshCompatibility();
 
 	QTabWidget* _tabs = nullptr;
 
@@ -80,15 +89,17 @@ private:
 	QPushButton* _removeButton = nullptr;
 	QPushButton* _clearButton = nullptr;
 
-	// Calibration tab
-	QLineEdit* _darkPath = nullptr;
-	QLabel*    _darkStatus = nullptr;
-	QPushButton* _darkBrowseButton = nullptr;
-	QPushButton* _darkClearButton = nullptr;
-	QLineEdit* _flatPath = nullptr;
-	QLabel*    _flatStatus = nullptr;
-	QPushButton* _flatBrowseButton = nullptr;
-	QPushButton* _flatClearButton = nullptr;
+	// Darks / Flats candidate tables (the master library the engine matches from).
+	QTableWidget* _darkTable = nullptr;
+	QTableWidget* _flatTable = nullptr;
+
+	// Shared "Classify by" controls (Pascal classify_dark_* / classify_flat_filter
+	// + delta_temp).
+	QCheckBox* _classDarkExp = nullptr;
+	QCheckBox* _classDarkTemp = nullptr;
+	QCheckBox* _classDarkGain = nullptr;
+	QCheckBox* _classFlatFilter = nullptr;
+	QSpinBox*  _deltaTemp = nullptr;
 
 	// Settings tab
 	QComboBox* _methodCombo = nullptr;

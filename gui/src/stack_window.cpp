@@ -15,6 +15,7 @@
 #include "../../src/stacking/stack.h"
 #include "../../src/stacking/stack_routines.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDebug>
@@ -129,8 +130,12 @@ StackWindow::StackWindow(QWidget* parent) :
 	root->addWidget(_tabs, 1);
 
 	buildLightsTab();
-	buildCalibrationTab();
+	buildDarksTab();
+	buildFlatsTab();
 	buildSettingsTab();
+
+	// Shared "Classify by" bar, visible under the tabs (Pascal classify_groupbox1).
+	root->addWidget(buildClassifyBar());
 
 	_phaseLabel = new QLabel(this);
 	_phaseLabel->setStyleSheet("color: gray;");
@@ -151,38 +156,195 @@ StackWindow::StackWindow(QWidget* parent) :
 	root->addLayout(stackRow);
 
 	connect(_stackButton, &QPushButton::clicked, this, &StackWindow::startStack);
-
-	hydrateCalibrationFromSettings();
 }
 
-void StackWindow::hydrateCalibrationFromSettings() {
+namespace {
+
+// Column layout shared by the dark and flat candidate tables (mirrors the Pascal
+// listview columns the port's Header can supply; Type/Background/σ are omitted —
+// no IMAGETYP field / no pixel pass here).
+enum MasterCol {
+	kMFile = 0, kMExp, kMTemp, kMBin, kMSize, kMFilter, kMGain, kMJd, kMCompat,
+	kMColCount
+};
+
+// Read the first Lights-tab frame's header (no pixels) as the reference light for
+// the Compatibility column. Returns false when there are no lights.
+[[nodiscard]] bool first_light_header(QTableWidget* lights, astap::Header& out) {
+	if (!lights || lights->rowCount() == 0) {
+		return false;
+	}
+	auto* item = lights->item(0, 0);
+	if (!item) {
+		return false;
+	}
+	const auto path = item->data(Qt::UserRole).toString();
+	auto memo = std::vector<std::string>{};
+	auto img  = astap::ImageArray{};
+	return astap::core::load_fits(std::filesystem::path(path.toStdString()),
+		/*light=*/true, /*load_data=*/false, /*update_memo=*/false, /*get_ext=*/0,
+		memo, out, img);
+}
+
+// Assemble the match options from the shared "Classify by" controls.
+[[nodiscard]] astap::stacking::MasterMatchOptions match_options_from(
+		QCheckBox* exp, QCheckBox* temp, QCheckBox* gain, QCheckBox* filter,
+		QSpinBox* deltaTemp) {
+	astap::stacking::MasterMatchOptions o;
+	o.classify_exposure    = exp && exp->isChecked();
+	o.classify_temperature = temp && temp->isChecked();
+	o.classify_gain        = gain && gain->isChecked();
+	o.classify_filter      = filter && filter->isChecked();
+	o.delta_temp           = deltaTemp ? deltaTemp->value() : 3;
+	return o;
+}
+
+// Create an empty candidate table with the shared columns.
+[[nodiscard]] QTableWidget* make_master_table(QWidget* parent) {
+	auto* t = new QTableWidget(0, kMColCount, parent);
+	t->setHorizontalHeaderLabels({
+		QObject::tr("File"), QObject::tr("Exp"), QObject::tr("Temp"),
+		QObject::tr("Bin"), QObject::tr("Size"), QObject::tr("Filter"),
+		QObject::tr("Gain"), QObject::tr("JD"), QObject::tr("Compatibility")});
+	t->horizontalHeader()->setSectionResizeMode(kMFile, QHeaderView::Stretch);
+	t->horizontalHeader()->setSectionResizeMode(kMCompat, QHeaderView::Stretch);
+	t->verticalHeader()->setVisible(false);
+	t->setSelectionBehavior(QAbstractItemView::SelectRows);
+	t->setSelectionMode(QAbstractItemView::ExtendedSelection);
+	t->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	t->setWordWrap(false);
+	return t;
+}
+
+}  // namespace
+
+void StackWindow::addMasterFiles(QTableWidget* table, const QString& title) {
 	QSettings settings;
-	const auto darkPath = settings.value("calibration/masterDark").toString();
-	if (!darkPath.isEmpty() && QFileInfo::exists(darkPath)) {
-		astap::stacking::MasterFrameInfo info;
-		if (astap::stacking::set_master_dark(
-		        std::filesystem::path(darkPath.toStdString()), info)) {
-			_darkPath->setText(darkPath);
-			_darkStatus->setText(tr("Loaded: %1 × %2, exp %3s")
-				.arg(info.width).arg(info.height)
-				.arg(info.exposure, 0, 'f', 1));
-		} else {
-			settings.remove("calibration/masterDark");
+	const auto lastDir = settings.value("files/lastCalDir").toString();
+	const auto paths = QFileDialog::getOpenFileNames(this,
+		tr("Add %1 frames").arg(title), lastDir,
+		tr("FITS images (*.fit *.fits *.fts);;All files (*)"));
+	if (paths.isEmpty()) {
+		return;
+	}
+	settings.setValue("files/lastCalDir", QFileInfo(paths.first()).absolutePath());
+
+	auto existing = QSet<QString>{};
+	for (int r = 0; r < table->rowCount(); ++r) {
+		existing.insert(table->item(r, kMFile)->data(Qt::UserRole).toString());
+	}
+
+	for (const auto& p : paths) {
+		if (existing.contains(p)) {
+			continue;
+		}
+		astap::stacking::MasterMetadata m;
+		if (!astap::stacking::analyse_master(
+		        std::filesystem::path(p.toStdString()), m)) {
+			continue;  // unreadable header — skip
+		}
+		const int row = table->rowCount();
+		table->insertRow(row);
+
+		auto* fileItem = new QTableWidgetItem(QFileInfo(p).fileName());
+		fileItem->setData(Qt::UserRole, p);
+		fileItem->setToolTip(p);
+		fileItem->setFlags(fileItem->flags() | Qt::ItemIsUserCheckable);
+		fileItem->setCheckState(Qt::Checked);
+		table->setItem(row, kMFile, fileItem);
+
+		auto cell = [&](int col, const QString& text) {
+			auto* it = new QTableWidgetItem(text);
+			it->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+			table->setItem(row, col, it);
+		};
+		cell(kMExp,    m.exposure ? QString::number(m.exposure) : QStringLiteral("—"));
+		cell(kMTemp,   QString::number(m.set_temperature));
+		cell(kMBin,    QString::number(m.xbinning, 'g', 3));
+		cell(kMSize,   QString("%1×%2").arg(m.width).arg(m.height));
+		cell(kMFilter, QString::fromStdString(m.filter_name));
+		cell(kMGain,   QString::fromStdString(m.gain));
+		cell(kMJd,     QString::number(m.jd, 'f', 3));
+		cell(kMCompat, QString());
+	}
+	refreshCompatibility();
+}
+
+void StackWindow::removeSelectedRows(QTableWidget* table) {
+	auto rows = QList<int>{};
+	for (const auto* item : table->selectedItems()) {
+		if (item->column() == kMFile) {
+			rows.append(item->row());
 		}
 	}
-	const auto flatPath = settings.value("calibration/masterFlat").toString();
-	if (!flatPath.isEmpty() && QFileInfo::exists(flatPath)) {
-		astap::stacking::MasterFrameInfo info;
-		if (astap::stacking::set_master_flat(
-		        std::filesystem::path(flatPath.toStdString()), info)) {
-			_flatPath->setText(flatPath);
-			_flatStatus->setText(tr("Loaded: %1 × %2")
-				.arg(info.width).arg(info.height));
-		} else {
-			settings.remove("calibration/masterFlat");
-		}
+	std::sort(rows.begin(), rows.end(), std::greater<int>());
+	for (const auto r : rows) {
+		table->removeRow(r);
 	}
 }
+
+void StackWindow::refreshCompatibility() {
+	astap::Header light;
+	const bool haveLight = first_light_header(_fileTable, light);
+	const auto opts = match_options_from(_classDarkExp, _classDarkTemp,
+		_classDarkGain, _classFlatFilter, _deltaTemp);
+
+	auto fill = [&](QTableWidget* table, bool isFlat) {
+		for (int r = 0; r < table->rowCount(); ++r) {
+			auto* fileItem = table->item(r, kMFile);
+			if (!fileItem) {
+				continue;
+			}
+			auto text = QStringLiteral("—");
+			if (haveLight) {
+				const auto path = fileItem->data(Qt::UserRole).toString();
+				astap::stacking::MasterMetadata m;
+				if (astap::stacking::analyse_master(
+				        std::filesystem::path(path.toStdString()), m)) {
+					const auto issue = isFlat
+						? astap::stacking::master_flat_issue(light, m, opts)
+						: astap::stacking::master_dark_issue(light, m, opts);
+					text = issue.empty() ? tr("OK")
+					                     : QString::fromStdString(issue);
+				}
+			}
+			auto* it = table->item(r, kMCompat);
+			if (!it) {
+				it = new QTableWidgetItem();
+				table->setItem(r, kMCompat, it);
+			}
+			it->setText(text);
+		}
+	};
+	fill(_darkTable, /*isFlat=*/false);
+	fill(_flatTable, /*isFlat=*/true);
+}
+
+void StackWindow::applyLibrariesToEngine() {
+	auto gather = [](QTableWidget* table) {
+		auto paths = std::vector<std::filesystem::path>{};
+		for (int r = 0; r < table->rowCount(); ++r) {
+			auto* it = table->item(r, kMFile);
+			if (it && it->checkState() == Qt::Checked) {
+				paths.emplace_back(it->data(Qt::UserRole).toString().toStdString());
+			}
+		}
+		return paths;
+	};
+	astap::stacking::set_master_match_options(match_options_from(
+		_classDarkExp, _classDarkTemp, _classDarkGain, _classFlatFilter, _deltaTemp));
+	const auto darks = gather(_darkTable);
+	const auto flats = gather(_flatTable);
+	astap::stacking::set_dark_library(darks);
+	astap::stacking::set_flat_library(flats);
+}
+
+void StackWindow::addDarkFiles() { addMasterFiles(_darkTable, tr("dark")); }
+void StackWindow::addFlatFiles() { addMasterFiles(_flatTable, tr("flat")); }
+void StackWindow::removeDarks()  { removeSelectedRows(_darkTable); }
+void StackWindow::removeFlats()  { removeSelectedRows(_flatTable); }
+void StackWindow::clearDarks()   { _darkTable->setRowCount(0); refreshCompatibility(); }
+void StackWindow::clearFlats()   { _flatTable->setRowCount(0); refreshCompatibility(); }
 
 void StackWindow::buildLightsTab() {
 	auto* page = new QWidget(_tabs);
@@ -218,54 +380,84 @@ void StackWindow::buildLightsTab() {
 	_tabs->addTab(page, tr("Lights"));
 }
 
-void StackWindow::buildCalibrationTab() {
+void StackWindow::buildDarksTab() {
 	auto* page = new QWidget(_tabs);
 	auto* layout = new QVBoxLayout(page);
+	_darkTable = make_master_table(page);
+	layout->addWidget(_darkTable, 1);
 
-	auto makeRow = [&](const QString& title,
-	                   QLineEdit*& pathEdit, QLabel*& statusLabel,
-	                   QPushButton*& browseBtn, QPushButton*& clearBtn) {
-		auto* group = new QGroupBox(title, page);
-		auto* groupLayout = new QVBoxLayout(group);
-		auto* row = new QHBoxLayout();
-		pathEdit = new QLineEdit(group);
-		pathEdit->setReadOnly(true);
-		pathEdit->setPlaceholderText(tr("No file loaded"));
-		browseBtn = new QPushButton(tr("Browse…"), group);
-		clearBtn = new QPushButton(tr("Clear"), group);
-		row->addWidget(pathEdit, 1);
-		row->addWidget(browseBtn);
-		row->addWidget(clearBtn);
-		groupLayout->addLayout(row);
-		statusLabel = new QLabel(tr("—"), group);
-		statusLabel->setStyleSheet("color: gray;");
-		groupLayout->addWidget(statusLabel);
-		layout->addWidget(group);
-	};
+	auto* row = new QHBoxLayout();
+	auto* add = new QPushButton(tr("Add…"), page);
+	auto* rem = new QPushButton(tr("Remove"), page);
+	auto* clr = new QPushButton(tr("Clear"), page);
+	row->addWidget(add);
+	row->addWidget(rem);
+	row->addWidget(clr);
+	row->addStretch(1);
+	layout->addLayout(row);
 
-	makeRow(tr("Master Dark"), _darkPath, _darkStatus,
-	        _darkBrowseButton, _darkClearButton);
-	makeRow(tr("Master Flat"), _flatPath, _flatStatus,
-	        _flatBrowseButton, _flatClearButton);
+	connect(add, &QPushButton::clicked, this, &StackWindow::addDarkFiles);
+	connect(rem, &QPushButton::clicked, this, &StackWindow::removeDarks);
+	connect(clr, &QPushButton::clicked, this, &StackWindow::clearDarks);
 
-	auto* biasNote = new QLabel(
-		tr("Bias subtraction is not yet implemented; load a bias-subtracted "
-		   "master dark instead."), page);
-	biasNote->setWordWrap(true);
-	biasNote->setStyleSheet("color: gray; font-style: italic;");
-	layout->addWidget(biasNote);
-	layout->addStretch(1);
+	_tabs->addTab(page, tr("Darks"));
+}
 
-	connect(_darkBrowseButton, &QPushButton::clicked,
-	        this, &StackWindow::browseMasterDark);
-	connect(_darkClearButton, &QPushButton::clicked,
-	        this, &StackWindow::clearMasterDark);
-	connect(_flatBrowseButton, &QPushButton::clicked,
-	        this, &StackWindow::browseMasterFlat);
-	connect(_flatClearButton, &QPushButton::clicked,
-	        this, &StackWindow::clearMasterFlat);
+void StackWindow::buildFlatsTab() {
+	auto* page = new QWidget(_tabs);
+	auto* layout = new QVBoxLayout(page);
+	_flatTable = make_master_table(page);
+	layout->addWidget(_flatTable, 1);
 
-	_tabs->addTab(page, tr("Calibration"));
+	auto* row = new QHBoxLayout();
+	auto* add = new QPushButton(tr("Add…"), page);
+	auto* rem = new QPushButton(tr("Remove"), page);
+	auto* clr = new QPushButton(tr("Clear"), page);
+	row->addWidget(add);
+	row->addWidget(rem);
+	row->addWidget(clr);
+	row->addStretch(1);
+	layout->addLayout(row);
+
+	connect(add, &QPushButton::clicked, this, &StackWindow::addFlatFiles);
+	connect(rem, &QPushButton::clicked, this, &StackWindow::removeFlats);
+	connect(clr, &QPushButton::clicked, this, &StackWindow::clearFlats);
+
+	_tabs->addTab(page, tr("Flats"));
+}
+
+QWidget* StackWindow::buildClassifyBar() {
+	auto* group = new QGroupBox(tr("Classify by"), this);
+	auto* row = new QHBoxLayout(group);
+
+	_classDarkExp    = new QCheckBox(tr("Dark exposure"), group);
+	_classDarkTemp   = new QCheckBox(tr("Dark temperature"), group);
+	_classDarkGain   = new QCheckBox(tr("Dark gain"), group);
+	_classFlatFilter = new QCheckBox(tr("Flat filter"), group);
+
+	_deltaTemp = new QSpinBox(group);
+	_deltaTemp->setRange(1, 5);          // Pascal delta_temp_updown1 (Min 1, Max 5)
+	_deltaTemp->setValue(3);             // default 3
+	_deltaTemp->setPrefix(tr("± "));
+	_deltaTemp->setSuffix(tr(" °C"));
+	_deltaTemp->setToolTip(tr("Temperature tolerance for dark matching"));
+
+	row->addWidget(_classDarkExp);
+	row->addWidget(_classDarkTemp);
+	row->addWidget(_deltaTemp);
+	row->addWidget(_classDarkGain);
+	row->addWidget(_classFlatFilter);
+	row->addStretch(1);
+
+	// The Compatibility column depends on these — recompute on any change.
+	connect(_classDarkExp,    &QCheckBox::toggled, this, &StackWindow::refreshCompatibility);
+	connect(_classDarkTemp,   &QCheckBox::toggled, this, &StackWindow::refreshCompatibility);
+	connect(_classDarkGain,   &QCheckBox::toggled, this, &StackWindow::refreshCompatibility);
+	connect(_classFlatFilter, &QCheckBox::toggled, this, &StackWindow::refreshCompatibility);
+	connect(_deltaTemp, qOverload<int>(&QSpinBox::valueChanged),
+	        this, &StackWindow::refreshCompatibility);
+
+	return group;
 }
 
 void StackWindow::buildSettingsTab() {
@@ -358,6 +550,7 @@ void StackWindow::addFiles() {
 		combo->setCurrentIndex(guess_channel(p));
 		_fileTable->setCellWidget(row, 1, combo);
 	}
+	refreshCompatibility();  // the first light is the compatibility reference
 }
 
 void StackWindow::removeSelected() {
@@ -371,75 +564,12 @@ void StackWindow::removeSelected() {
 	for (const auto r : rows) {
 		_fileTable->removeRow(r);
 	}
+	refreshCompatibility();
 }
 
 void StackWindow::clearList() {
 	_fileTable->setRowCount(0);
-}
-
-void StackWindow::browseMasterDark() {
-	QSettings settings;
-	const auto lastDir = settings.value("files/lastCalDir").toString();
-	const auto path = QFileDialog::getOpenFileName(
-		this, tr("Select master dark"), lastDir,
-		tr("FITS images (*.fit *.fits *.fts);;All files (*)"));
-	if (path.isEmpty()) {
-		return;
-	}
-	settings.setValue("files/lastCalDir", QFileInfo(path).absolutePath());
-
-	astap::stacking::MasterFrameInfo info;
-	if (!astap::stacking::set_master_dark(
-	        std::filesystem::path(path.toStdString()), info)) {
-		QMessageBox::warning(this, tr("Master Dark"),
-			tr("Failed to load: %1").arg(path));
-		return;
-	}
-	_darkPath->setText(path);
-	_darkStatus->setText(tr("Loaded: %1 × %2, exp %3s")
-		.arg(info.width).arg(info.height)
-		.arg(info.exposure, 0, 'f', 1));
-	settings.setValue("calibration/masterDark", path);
-}
-
-void StackWindow::browseMasterFlat() {
-	QSettings settings;
-	const auto lastDir = settings.value("files/lastCalDir").toString();
-	const auto path = QFileDialog::getOpenFileName(
-		this, tr("Select master flat"), lastDir,
-		tr("FITS images (*.fit *.fits *.fts);;All files (*)"));
-	if (path.isEmpty()) {
-		return;
-	}
-	settings.setValue("files/lastCalDir", QFileInfo(path).absolutePath());
-
-	astap::stacking::MasterFrameInfo info;
-	if (!astap::stacking::set_master_flat(
-	        std::filesystem::path(path.toStdString()), info)) {
-		QMessageBox::warning(this, tr("Master Flat"),
-			tr("Failed to load: %1").arg(path));
-		return;
-	}
-	_flatPath->setText(path);
-	_flatStatus->setText(tr("Loaded: %1 × %2")
-		.arg(info.width).arg(info.height));
-	settings.setValue("calibration/masterFlat", path);
-}
-
-void StackWindow::clearMasterDark() {
-	astap::stacking::MasterFrameInfo info;
-	(void)astap::stacking::set_master_dark({}, info);
-	_darkPath->clear();
-	_darkStatus->setText(tr("—"));
-	QSettings().remove("calibration/masterDark");
-}
-
-void StackWindow::clearMasterFlat() {
-	astap::stacking::MasterFrameInfo info;
-	(void)astap::stacking::set_master_flat({}, info);
-	_flatPath->clear();
-	_flatStatus->setText(tr("—"));
-	QSettings().remove("calibration/masterFlat");
+	refreshCompatibility();
 }
 
 namespace {
@@ -509,6 +639,7 @@ void StackWindow::startStack() {
 	}
 
 	applySettingsToEngine();
+	applyLibrariesToEngine();   // install the checked dark/flat candidate libraries
 
 	_stackButton->setEnabled(false);
 	_progress->setValue(0);

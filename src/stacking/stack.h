@@ -117,6 +117,50 @@ void set_dark_library(std::span<const std::filesystem::path> masters);
 void set_flat_library(std::span<const std::filesystem::path> masters);
 
 ///----------------------------------------
+///  @brief Pre-analysed metadata for one candidate master (the columns the GUI
+///         dark / flat listviews display and the selector matches on).
+///----------------------------------------
+
+struct MasterMetadata {
+    std::filesystem::path path;
+    int         exposure = 0;        // round(head.exposure)
+    int         set_temperature = 0;
+    std::string gain;                // egain if present, else gain
+    double      xbinning = 0.0;
+    int         width = 0;
+    int         height = 0;
+    std::string date_obs;
+    double      jd = 0.0;            // observation JD (start)
+    std::string filter_name;        // flats
+    std::string calstat;            // flats
+};
+
+///----------------------------------------
+///  @brief Read a candidate master's header (no pixels) into @ref MasterMetadata.
+/// @return @c true on success.
+///----------------------------------------
+
+[[nodiscard]] bool analyse_master(const std::filesystem::path& path, MasterMetadata& out);
+
+///----------------------------------------
+///  @brief Compatibility of a candidate master with a light frame, given the
+///         match options — the single source of truth shared by the per-frame
+///         selector and the GUI's Compatibility column.
+///  @details Returns an empty string when the candidate is eligible; otherwise the
+///           Pascal-style reason it was rejected (`exposure<>120`, `temperature<>-10`,
+///           `gain<>…`, `width<>…`, `height<>…`, `filter<>…`, `Calibration, not a
+///           flat!`), matching the strings ASTAP writes to its listview
+///           Compatibility column (`unit_stack.pas:12068-12080` / `12163-12169`).
+///----------------------------------------
+
+[[nodiscard]] std::string master_dark_issue(const Header& light,
+                                            const MasterMetadata& candidate,
+                                            const MasterMatchOptions& options);
+[[nodiscard]] std::string master_flat_issue(const Header& light,
+                                            const MasterMetadata& candidate,
+                                            const MasterMatchOptions& options);
+
+///----------------------------------------
 /// MARK: Non-GUI algorithmic exports
 ///----------------------------------------
 
