@@ -603,3 +603,77 @@ TEST_CASE("a created master dark can be applied when stacking") {
 
 	fs::remove_all(s.dir);
 }
+
+TEST_CASE("master library selects a dimension-compatible dark, rejects mismatches") {
+	if (!assets_available()) return;
+	auto s = stage_m31("darklib");
+	if (s.count < 3) { MESSAGE("need 3 M31 frames — skipping"); return; }
+	// ngc_990_r is a 177x177 frame — an incompatible candidate for the M31 lights.
+	const auto ngc = kCorpusDir / "ngc_990_r.fits";
+	if (!fs::exists(ngc)) { MESSAGE("ngc_990_r absent — skipping"); return; }
+
+	// Dark library: M31_c (matches the lights' dimensions) + ngc_990_r (does not).
+	const auto darks = s.dir / "darks";
+	fs::create_directories(darks);
+	fs::copy_file(s.files[2], darks / "M31_c.fits", fs::copy_options::overwrite_existing);
+	fs::copy_file(ngc, darks / "ngc_990_r.fits", fs::copy_options::overwrite_existing);
+
+	// Lights: M31_a + M31_b (staged copies; the pre-solve rewrites their WCS).
+	const std::string db = " -d " + q(kDbDir.string());
+	const std::string lights = " " + q(s.files[0].string()) + " " + q(s.files[1].string());
+	const auto out = s.dir / "stack.fits";
+	const auto st = run(q(kPortBin) + " -stackfiles -darklib " + q(darks.string())
+	                    + " -o " + q(out.string()) + db + lights);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "DARKLIB=") == "2");        // both candidates scanned
+	CHECK(field(st.out, "STACKED=") == "1");
+	REQUIRE(fs::exists(out));
+
+	// The compatible dark is selected; the mismatched candidate is never loaded.
+	CHECK(st.out.find("Loading master dark file") != std::string::npos);
+	CHECK(st.out.find("M31_c.fits") != std::string::npos);       // chosen
+	CHECK(st.out.find("darks/ngc_990_r.fits") == std::string::npos);  // rejected on size
+	// The dark was applied: CALSTAT gains 'D'.
+	{
+		std::ifstream ifs(out, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("CALSTAT = 'D") != std::string::npos);
+	}
+
+	fs::remove_all(s.dir);
+}
+
+TEST_CASE("master library with only incompatible darks applies no dark") {
+	if (!assets_available()) return;
+	auto s = stage_m31("darklibnone");
+	if (s.count < 2) { MESSAGE("need >= 2 M31 frames — skipping"); return; }
+	const auto ngc = kCorpusDir / "ngc_990_r.fits";
+	if (!fs::exists(ngc)) { MESSAGE("ngc_990_r absent — skipping"); return; }
+
+	// Library holds only the wrong-dimension candidate → no suitable dark exists.
+	const auto darks = s.dir / "darks";
+	fs::create_directories(darks);
+	fs::copy_file(ngc, darks / "ngc_990_r.fits", fs::copy_options::overwrite_existing);
+
+	const std::string db = " -d " + q(kDbDir.string());
+	const std::string lights = " " + q(s.files[0].string()) + " " + q(s.files[1].string());
+	const auto out = s.dir / "stack.fits";
+	const auto st = run(q(kPortBin) + " -stackfiles -darklib " + q(darks.string())
+	                    + " -o " + q(out.string()) + db + lights);
+	CHECK(st.exit_code == 0);
+	CHECK(field(st.out, "DARKLIB=") == "1");
+	CHECK(field(st.out, "STACKED=") == "1");        // stack still completes
+	CHECK(st.out.find("could not find a suitable dark") != std::string::npos);
+	REQUIRE(fs::exists(out));
+
+	// No dark applied → CALSTAT is the stacked marker 'S', with no 'D'.
+	{
+		std::ifstream ifs(out, std::ios::binary);
+		std::string hdr(2880 * 4, '\0');
+		ifs.read(hdr.data(), static_cast<std::streamsize>(hdr.size()));
+		CHECK(hdr.find("CALSTAT = 'D") == std::string::npos);
+	}
+
+	fs::remove_all(s.dir);
+}

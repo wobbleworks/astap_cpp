@@ -13,6 +13,7 @@
 #pragma once
 
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -76,6 +77,44 @@ struct MasterFrameInfo {
 
 [[nodiscard]] bool set_master_flat(const std::filesystem::path& path,
                                    MasterFrameInfo& info);
+
+///----------------------------------------
+///  @brief Per-frame master-selection criteria (Pascal classify checkboxes +
+///         temperature tolerance).
+///  @details Mirrors the GUI defaults (`unit_stack.lfm`): every classify flag
+///           off, @c delta_temp = 3. Width/height must always match a candidate
+///           and are not gated by a flag.
+///----------------------------------------
+
+struct MasterMatchOptions {
+    bool classify_exposure    = false;  // dark: exposure must equal the light's
+    bool classify_temperature = false;  // dark: |Δtemp| <= delta_temp
+    bool classify_gain        = false;  // dark: gain/egain must match
+    bool classify_filter      = false;  // flat: filter name must match (case-insensitive)
+    int  delta_temp           = 3;      // temperature tolerance in degrees
+};
+
+///----------------------------------------
+///  @brief Install the master-selection criteria used by the library lookup.
+///----------------------------------------
+
+void set_master_match_options(const MasterMatchOptions& options);
+
+///----------------------------------------
+///  @brief Install a library of candidate master darks / flats.
+///  @details Each file's header is pre-analysed (exposure / set-temperature /
+///           gain / dimensions / JD, plus filter + CALSTAT for flats) and cached.
+///           During stacking, @ref apply_dark_and_flat's per-frame
+///           @c load_master_dark / @c load_master_flat then picks the best match
+///           for each light (the classify criteria + closest JD), hot-reloading
+///           when the winner changes. Ports the candidate set the GUI holds in
+///           its dark / flat listviews (`unit_stack.pas:12028,12132`). Pass an
+///           empty span to clear the library (restoring the single-resident-master
+///           path via @ref set_master_dark / @ref set_master_flat).
+///----------------------------------------
+
+void set_dark_library(std::span<const std::filesystem::path> masters);
+void set_flat_library(std::span<const std::filesystem::path> masters);
 
 ///----------------------------------------
 /// MARK: Non-GUI algorithmic exports

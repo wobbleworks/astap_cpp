@@ -163,6 +163,10 @@ struct Args {
     std::optional<std::string> master_flat;   // -stackfiles master flat
     std::optional<double>      outlier_sigma; // -sd: quality-outlier rejection
     std::vector<std::string>   flatdark_files; // -flatdark (repeatable): master-flat bias
+    std::optional<std::string> darklib;       // -darklib <dir>: candidate dark library
+    std::optional<std::string> flatlib;       // -flatlib <dir>: candidate flat library
+    std::optional<std::string> classify;      // -classify exposure,temperature,gain,filter
+    std::optional<int>         delta_temp;    // -deltatemp <N>: temp tolerance (deg)
     std::optional<std::string> ch_red;        // -lrgb red channel
     std::optional<std::string> ch_green;      // -lrgb green channel
     std::optional<std::string> ch_blue;       // -lrgb blue channel
@@ -348,6 +352,10 @@ Args parse_args(int argc, char* argv[]) {
         if (try_value("dark",   [&](auto v){ out.master_dark  = v; }))                   continue;
         if (try_value("flat",   [&](auto v){ out.master_flat  = v; }))                   continue;
         if (try_value("sd",     [&](auto v){ out.outlier_sigma = parse_double(v); }))    continue;
+        if (try_value("darklib",  [&](auto v){ out.darklib    = v; }))                   continue;
+        if (try_value("flatlib",  [&](auto v){ out.flatlib    = v; }))                   continue;
+        if (try_value("classify", [&](auto v){ out.classify   = v; }))                   continue;
+        if (try_value("deltatemp",[&](auto v){ out.delta_temp = parse_int(v, 3); }))     continue;
         // Repeatable: each -flatdark <file> adds one flat-dark for -makeflat.
         if (auto v = take_value(av, i, "flatdark", next); v) {
             out.flatdark_files.push_back(*v); continue;
@@ -848,6 +856,49 @@ int main(int argc, char* argv[]) {
                                                     : std::filesystem::path{};
         std::filesystem::path mflat = a.master_flat ? std::filesystem::path{*a.master_flat}
                                                     : std::filesystem::path{};
+
+        // Optional candidate-master libraries: each light frame then picks the
+        // best-matching dark/flat (classify criteria + closest JD) at combine
+        // time, hot-reloading when the winner changes.
+        {
+            astap::stacking::MasterMatchOptions mopts;
+            if (a.delta_temp) { mopts.delta_temp = *a.delta_temp; }
+            if (a.classify) {
+                const std::string& c = *a.classify;
+                mopts.classify_exposure    = c.find("exposure")    != std::string::npos;
+                mopts.classify_temperature = c.find("temperature") != std::string::npos;
+                mopts.classify_gain        = c.find("gain")        != std::string::npos;
+                mopts.classify_filter      = c.find("filter")      != std::string::npos;
+            }
+            astap::stacking::set_master_match_options(mopts);
+        }
+        auto scan_masters = [](const std::string& dir) {
+            std::vector<std::filesystem::path> files;
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+                if (ec) break;
+                if (!e.is_regular_file()) continue;
+                std::string ext = e.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char ch){ return std::tolower(ch); });
+                if (ext == ".fit" || ext == ".fits" || ext == ".fts") {
+                    files.push_back(e.path());
+                }
+            }
+            std::sort(files.begin(), files.end());   // deterministic tie-break
+            return files;
+        };
+        if (a.darklib) {
+            const auto lib = scan_masters(*a.darklib);
+            astap::stacking::set_dark_library(lib);
+            std::cout << "DARKLIB=" << lib.size() << '\n';
+        }
+        if (a.flatlib) {
+            const auto lib = scan_masters(*a.flatlib);
+            astap::stacking::set_flat_library(lib);
+            std::cout << "FLATLIB=" << lib.size() << '\n';
+        }
+
         const double sigma = a.outlier_sigma.value_or(0.0);
         const auto res = astap::stacking::stack_files(frames, method, out, mdark, mflat, sigma);
         std::cout << std::format(

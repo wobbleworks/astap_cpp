@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -149,15 +150,228 @@ double      dark_norm_value  = 0.0;
 int         last_light_jd    = 0;
 int         process_as_osc   = 0;
 
-void load_master_dark([[maybe_unused]] int jd, [[maybe_unused]] Header& hd) {
-    // Hot-reload is not implemented; the GUI pre-loads via set_master_dark
-    // and apply_dark_and_flat reads the resident img_dark / head_dark state.
-    // TODO: port the JD / temperature-matched master selection from
-    // astap_main.pas once the calibration library layout is ported.
+// Defined further down in this TU; used by the library lookup below.
+[[nodiscard]] bool load_master_frame(const std::filesystem::path& path,
+                                     ImageArray& img_out, Header& head_out,
+                                     int& count_field);
+
+///----------------------------------------
+/// MARK: Master calibration library (per-frame hot-reload)
+///----------------------------------------
+
+// A pre-analysed candidate master; the metadata mirrors the columns the GUI's
+// dark / flat listviews carry (exposure / temperature / gain / dimensions / JD,
+// plus filter + CALSTAT for flats).
+struct MasterCandidate {
+    std::filesystem::path path;
+    int         exposure = 0;        // round(head.exposure)
+    int         set_temperature = 0;
+    std::string gain;                // egain if present, else gain
+    int         width = 0;
+    int         height = 0;
+    double      jd = 0.0;            // observation JD (start)
+    std::string filter_name;        // flats
+    std::string calstat;            // flats — reject a calibrated light/dark
+};
+
+std::vector<MasterCandidate> dark_library;
+std::vector<MasterCandidate> flat_library;
+std::string last_dark_loaded;
+std::string last_flat_loaded;
+MasterMatchOptions master_match;
+
+// Case-insensitive string equality (Pascal AnsiCompareText).
+[[nodiscard]] bool iequals(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) { return false; }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i]))
+            != std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
 }
 
-void load_master_flat([[maybe_unused]] int jd, [[maybe_unused]] Header& hd) {
-    // See load_master_dark comment — same deal for flats.
+// Read a candidate master's header (no pixels) into a MasterCandidate.
+[[nodiscard]] bool analyse_candidate(const std::filesystem::path& path,
+                                     MasterCandidate& out) {
+    auto memo = std::vector<std::string>{};
+    auto img  = ImageArray{};
+    auto head = Header{};
+    if (!astap::core::load_fits(path, /*light=*/false, /*load_data=*/false,
+                                /*update_memo=*/true, /*get_ext=*/0,
+                                memo, head, img)) {
+        return false;
+    }
+    out.path            = path;
+    out.exposure        = static_cast<int>(std::lrint(head.exposure));
+    out.set_temperature = head.set_temperature;
+    out.gain            = head.egain.empty() ? head.gain : head.egain;
+    out.width           = head.width;
+    out.height          = head.height;
+    out.filter_name     = head.filter_name;
+    out.calstat         = head.calstat;
+    // JD from DATE-OBS (date_to_jd writes the jd_start/jd_mid globals).
+    date_to_jd(head.date_obs, head.date_avg, head.exposure);
+    out.jd = jd_start;
+    return true;
+}
+
+void build_library(std::span<const std::filesystem::path> masters,
+                   std::vector<MasterCandidate>& library) {
+    library.clear();
+    for (const auto& path : masters) {
+        MasterCandidate cand;
+        if (analyse_candidate(path, cand)) {
+            library.push_back(std::move(cand));
+        } else {
+            memo2_message("Skipping unreadable master: " + path.string());
+        }
+    }
+}
+
+///----------------------------------------
+///  @brief Select + load the closest-matching master dark for one light frame.
+///  @details Ports load_master_dark (unit_stack.pas:12028): among the candidate
+///           library, keep those matching the enabled classify criteria and the
+///           mandatory width/height, pick the one with the closest JD, and reload
+///           only when it differs from the last (the hot-reload cache). Emits the
+///           compatibility warnings. A no-op when no library is installed, so the
+///           single-resident-master path (set_master_dark) is preserved.
+///----------------------------------------
+
+void load_master_dark(int jd, Header& hd) {
+    if (dark_library.empty()) {
+        return;  // single-resident-master path (set_master_dark) — nothing to do
+    }
+
+    const int         light_exposure    = static_cast<int>(std::lrint(hd.exposure));
+    const int         light_temperature = hd.set_temperature;
+    const std::string dark_gain = hd.egain.empty() ? hd.gain : hd.egain;
+
+    std::string filen;
+    double day_offset = 99999999.0;
+    for (const auto& cand : dark_library) {
+        if (master_match.classify_exposure && light_exposure != cand.exposure) {
+            continue;
+        }
+        if (master_match.classify_temperature
+            && std::abs(light_temperature - cand.set_temperature) > master_match.delta_temp) {
+            continue;
+        }
+        if (master_match.classify_gain && dark_gain != cand.gain) {
+            continue;
+        }
+        if (hd.width != cand.width || hd.height != cand.height) {
+            continue;  // dimensions must always match
+        }
+        const double d = std::abs(cand.jd - jd);
+        if (d < day_offset) {
+            filen      = cand.path.string();
+            day_offset = d;
+        }
+    }
+
+    if (filen.empty()) {
+        memo2_message("Warning, could not find a suitable dark for "
+            + std::to_string(light_exposure) + " sec, temperature "
+            + std::to_string(light_temperature) + " deg, gain " + dark_gain
+            + " and width " + std::to_string(hd.width)
+            + ". De-classify temperature/exposure or add correct darks.");
+        head_dark.dark_count = 0;
+        return;
+    }
+
+    if (head_ref.dark_count == 0 || filen != last_dark_loaded) {
+        memo2_message("Loading master dark file " + filen);
+        if (!load_master_frame(filen, img_dark, head_dark, head_dark.dark_count)) {
+            memo2_message("Error loading master dark " + filen);
+            head_ref.dark_count = 0;
+            return;
+        }
+        // Compatibility warnings vs the light (even when it was the best match).
+        if (std::lrint(head_dark.exposure) != 0
+            && std::lrint(hd.exposure) != std::lrint(head_dark.exposure)) {
+            memo2_message("Warning: dark exposure time differs from the light.");
+            head_dark.issues += "D_exposure|";
+        }
+        if (head_dark.set_temperature != 999
+            && hd.set_temperature != head_dark.set_temperature) {
+            memo2_message("Warning: dark sensor temperature differs from the light.");
+            head_dark.issues += "D_temperature|";
+        }
+        if (!head_dark.gain.empty() && hd.gain != head_dark.gain) {
+            memo2_message("Warning: dark gain differs from the light.");
+            head_dark.issues += "D_gain|";
+        }
+        if (!head_dark.egain.empty() && hd.egain != head_dark.egain) {
+            memo2_message("Warning: dark egain differs from the light.");
+            head_dark.issues += "D_egain|";
+        }
+        last_dark_loaded = filen;
+        if (head_dark.dark_count == 0) { head_dark.dark_count = 1; }
+    }
+}
+
+///----------------------------------------
+///  @brief Select + load the closest-matching master flat for one light frame.
+///  @details Ports load_master_flat (unit_stack.pas:12132): match on filter name
+///           (when classified) + mandatory dimensions, reject a candidate that is
+///           itself a calibrated light/dark (D or F in CALSTAT), pick closest JD,
+///           reload only on change, and warn if the flat has no flat-dark/bias.
+///           A no-op when no library is installed (set_master_flat preserved).
+///----------------------------------------
+
+void load_master_flat(int jd, Header& hd) {
+    if (flat_library.empty()) {
+        return;
+    }
+
+    std::string filen;
+    double day_offset = 99999999.0;
+    for (const auto& cand : flat_library) {
+        if (master_match.classify_filter
+            && !iequals(hd.filter_name, cand.filter_name)) {
+            continue;
+        }
+        if (hd.width != cand.width || hd.height != cand.height) {
+            continue;
+        }
+        // A raw flat carries no D/F in CALSTAT; a D/F there means it is a
+        // calibrated light/dark, not a flat. (The Pascal `pos('F',imagetype)`
+        // override is omitted — the port's Header has no IMAGETYP field.)
+        if (cand.calstat.find('D') != std::string::npos
+            || cand.calstat.find('F') != std::string::npos) {
+            continue;
+        }
+        const double d = std::abs(cand.jd - jd);
+        if (d < day_offset) {
+            filen      = cand.path.string();
+            day_offset = d;
+        }
+    }
+
+    if (filen.empty()) {
+        memo2_message("Warning, could not find a suitable flat for \""
+            + hd.filter_name + "\". De-classify flat filter or add correct flats.");
+        head_flat.flat_count = 0;
+        return;
+    }
+
+    if (head_ref.flat_count == 0 || filen != last_flat_loaded) {
+        memo2_message("Loading master flat file " + filen);
+        if (!load_master_frame(filen, img_flat, head_flat, head_flat.flat_count)) {
+            memo2_message("Error loading master flat " + filen);
+            head_flat.flat_count = 0;
+            return;
+        }
+        last_flat_loaded = filen;
+        if (head_flat.calstat.find('B') == std::string::npos) {
+            memo2_message("Warning: flat not calibrated with a flat-dark/bias "
+                          "(CALSTAT/BIAS_CNT).");
+        }
+        if (head_flat.flat_count == 0) { head_flat.flat_count = 1; }
+    }
 }
 
 ///----------------------------------------
@@ -539,7 +753,7 @@ void black_spot_filter(ImageArray& img) {
 
 [[nodiscard]] bool apply_dark_and_flat(ImageArray& img, Header& hd) {
     auto result = false;
-    date_to_jd(hd.date_obs, "", hd.exposure);
+    date_to_jd(hd.date_obs, hd.date_avg, hd.exposure);
     
     // Dark subtraction
     if (hd.calstat.find('D') != std::string::npos) {
@@ -736,6 +950,20 @@ bool set_master_flat(const std::filesystem::path& path, MasterFrameInfo& info) {
     }
     fill_info(head_flat, info);
     return true;
+}
+
+void set_master_match_options(const MasterMatchOptions& options) {
+    master_match = options;
+}
+
+void set_dark_library(std::span<const std::filesystem::path> masters) {
+    build_library(masters, dark_library);
+    last_dark_loaded.clear();
+}
+
+void set_flat_library(std::span<const std::filesystem::path> masters) {
+    build_library(masters, flat_library);
+    last_flat_loaded.clear();
 }
 
 ///----------------------------------------
