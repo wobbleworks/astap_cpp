@@ -3,16 +3,19 @@
 A C++23 port of [ASTAP](https://www.hnsky.org/astap.htm) — the
 Astrometric STAcking Program by Han Kleijn. ASTAP solves astronomical
 images against star catalogs, stacks exposures, and measures photometry.
-ASTAP++ brings the core engine to modern C++ with a headless CLI and a
-static library suitable for embedding in iOS, macOS, watchOS, and
-visionOS applications.
+ASTAP++ brings the core engine to modern C++ as a portable static
+library with a command-line front end and an optional Qt 6 desktop GUI.
+This library has been built and is tested against Linux, Windows, and
+all Apple platforms.
 
 ## Status
 
-Port is functionally complete. The CLI binary builds and runs; a 22-suite
-doctest harness covers the pure-math modules (solving, stacking,
+Port is functionally complete. The static library, the `astap` CLI, and
+the Qt 6 desktop GUI build and run on Linux, Windows, and macOS; a
+22-suite doctest harness covers the pure-math modules (solving, stacking,
 photometry, ephemerides, WCS, SIP, annotation, inspector, etc.). The
-GUI layer from the original Lazarus program is not part of this port.
+original Lazarus GUI is reimplemented as a new Qt front end rather than
+ported line-for-line.
 
 ## Capabilities
 
@@ -34,7 +37,7 @@ GUI layer from the original Lazarus program is not part of this port.
 
 ## Building
 
-### CLI binary (native platform)
+### Static library + CLI (Linux, Windows, macOS)
 
 ```sh
 cmake -S . -B build
@@ -42,7 +45,21 @@ cmake --build build -j
 ./build/astap -h
 ```
 
-### Static library + xcframework (Apple platforms)
+Builds the `astap_lib` static library and the `astap` command-line
+binary with any C++23 toolchain (GCC, Clang, or MSVC).
+
+### Qt 6 desktop GUI (optional)
+
+```sh
+cmake -S . -B build -DASTAP_BUILD_GUI=ON
+cmake --build build -j
+```
+
+Requires Qt 6. The GUI builds on Linux, Windows, and macOS.
+
+### Apple xcframework (optional)
+
+For embedding the library in iOS, macOS, watchOS, or visionOS apps:
 
 ```sh
 ./build_frameworks
@@ -60,11 +77,12 @@ visionOS, visionOS Simulator, watchOS, watchOS Simulator, and macOS
 
 ## Requirements
 
-- C++23 compiler (tested with Apple Clang 17)
+- C++23 compiler (GCC 13+, Clang 16+, MSVC 19.37+, or Apple Clang 17)
 - CMake 3.20+
-- Xcode Command Line Tools (for Apple framework builds)
 - [doctest](https://github.com/doctest/doctest) as a sibling directory
   (`../doctest/doctest/doctest.h`) for tests
+- Optional: [Qt 6](https://www.qt.io/) for the desktop GUI
+- Optional: Xcode Command Line Tools, only for the Apple xcframework build
 - Optional: [stb](https://github.com/nothings/stb) as a sibling
   directory (`../stb/stb_image.h`) so the CLI picks up PNG / JPEG / TGA
   decoding
